@@ -62,7 +62,6 @@ onAuthStateChanged(auth, async (user) => {
     if (user) {
         currentUser = user;
 
-        // ユーザー情報をFirestoreに保存/更新
         try {
             await setDoc(doc(db, "users", user.uid), {
                 uid: user.uid,
@@ -74,7 +73,6 @@ onAuthStateChanged(auth, async (user) => {
             console.error("Error updating user info:", e);
         }
 
-        // 画面切り替え
         loginScreen.style.opacity = '0';
         setTimeout(() => {
             loginScreen.style.display = 'none';
@@ -145,12 +143,19 @@ async function sendMessage() {
     }
 }
 
-// --- 時刻フォーマット関数 ---
+// --- 時刻フォーマット ---
 function formatTime(timestamp) {
     if (!timestamp) return '';
-    // FirestoreのTimestamp型をDate型に変換
     const date = timestamp.toDate ? timestamp.toDate() : new Date();
     return date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+}
+
+// --- ★追加: 日付フォーマット（区切り線用） ---
+function formatDateLabel(timestamp) {
+    if (!timestamp) return '';
+    const date = timestamp.toDate ? timestamp.toDate() : new Date();
+    // 例: 2023年11月29日
+    return date.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
 }
 
 // --- メッセージ読み込みと表示 ---
@@ -161,18 +166,37 @@ function loadMessages() {
         msgContainer.innerHTML = '';
         
         let lastUid = null;
+        let lastDateString = null; // ★追加: 前回の日付文字列を保持
 
         snapshot.forEach((doc) => {
             const data = doc.data();
+            const currentDateString = formatDateLabel(data.createdAt); // このメッセージの日付
+            
+            // ★追加: 日付が変わったら区切り線を表示
+            if (currentDateString !== lastDateString) {
+                const dateDivider = document.createElement('div');
+                dateDivider.className = "flex justify-center my-6 fade-in";
+                dateDivider.innerHTML = `
+                    <span class="bg-slate-200/80 text-slate-500 text-xs px-3 py-1 rounded-full shadow-sm">
+                        ${currentDateString}
+                    </span>
+                `;
+                msgContainer.appendChild(dateDivider);
+                
+                lastDateString = currentDateString; // 日付を更新
+                lastUid = null; // 日付が変わったら連続投稿扱いしない（アイコンを出すため）
+            }
+
+            // --- ここから通常のメッセージ表示 ---
             const isMyMessage = data.uid === currentUser.uid;
             const isContinuous = data.uid === lastUid;
-            const timeString = formatTime(data.createdAt); // 時刻を取得
+            const timeString = formatTime(data.createdAt);
 
             const msgRow = document.createElement('div');
             msgRow.className = `flex w-full ${isMyMessage ? 'justify-end' : 'justify-start'} ${isContinuous ? 'mt-1' : 'mt-4'} fade-in`;
 
             if (isMyMessage) {
-                // === 自分のメッセージ ===
+                // 自分
                 msgRow.innerHTML = `
                     <div class="max-w-[75%]">
                         <div class="bg-blue-600 text-white px-4 py-2 rounded-2xl rounded-tr-sm shadow-sm text-sm leading-relaxed break-words">
@@ -184,7 +208,7 @@ function loadMessages() {
                     </div>
                 `;
             } else {
-                // === 相手のメッセージ ===
+                // 相手
                 msgRow.innerHTML = `
                     <div class="flex items-end gap-2 max-w-[85%]">
                         ${!isContinuous ? `<img src="${data.photoURL}" class="w-8 h-8 rounded-full shadow-sm mb-6 bg-slate-200 object-cover">` : '<div class="w-8"></div>'}
@@ -245,7 +269,6 @@ function loadUsers() {
             const userItem = document.createElement('div');
             userItem.className = "flex items-center gap-3 p-2 bg-slate-50 rounded-xl hover:bg-slate-100 transition";
             
-            // ★変更: You -> あなた
             userItem.innerHTML = `
                 <img src="${user.photoURL}" class="w-10 h-10 rounded-full bg-slate-200 object-cover border border-slate-200">
                 <div class="flex-1 min-w-0">
