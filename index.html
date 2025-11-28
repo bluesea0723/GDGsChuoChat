@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Group Chat Prototype</title>
+    <style>
+        /* 簡単なスタイル */
+        body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; }
+        #chat-screen { display: none; }
+        .message { border-bottom: 1px solid #ccc; padding: 10px 0; }
+        .my-message { text-align: right; background-color: #e0f7fa; }
+        .meta { font-size: 0.8em; color: gray; }
+        #input-area { margin-top: 20px; display: flex; gap: 10px; }
+        input { flex-grow: 1; padding: 10px; }
+        button { padding: 10px 20px; cursor: pointer; }
+        img.avatar { width: 30px; height: 30px; border-radius: 50%; vertical-align: middle; }
+    </style>
+</head>
+<body>
+
+    <div id="login-screen">
+        <h1>チャットアプリへようこそ</h1>
+        <button id="login-btn">Googleでログイン</button>
+    </div>
+
+    <div id="chat-screen">
+        <header style="display: flex; justify-content: space-between; align-items: center;">
+            <h2>グループチャット</h2>
+            <button id="logout-btn">ログアウト</button>
+        </header>
+        
+        <div id="messages-container" style="height: 400px; overflow-y: scroll; border: 1px solid #ddd; padding: 10px;">
+            </div>
+
+        <div id="input-area">
+            <input type="text" id="message-input" placeholder="メッセージを入力...">
+            <button id="send-btn">送信</button>
+        </div>
+    </div>
+
+    <script type="module">
+        // Import the functions you need from the SDKs you need
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } 
+            from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, serverTimestamp } 
+            from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        // TODO: ここをご自身のFirebase設定に書き換えてください
+        const firebaseConfig = {
+        apiKey: "AIzaSyCY9Lzf8ooRT6-yfjG8yP8nNxMYba45BmE",
+        authDomain: "gdgschuo-chat.firebaseapp.com",
+        projectId: "gdgschuo-chat",
+        storageBucket: "gdgschuo-chat.firebasestorage.app",
+        messagingSenderId: "25562541212",
+        appId: "1:25562541212:web:c2c7dcc68e0a672e7f9159"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const provider = new GoogleAuthProvider();
+
+        // DOM Elements
+        const loginScreen = document.getElementById('login-screen');
+        const chatScreen = document.getElementById('chat-screen');
+        const loginBtn = document.getElementById('login-btn');
+        const logoutBtn = document.getElementById('logout-btn');
+        const sendBtn = document.getElementById('send-btn');
+        const msgInput = document.getElementById('message-input');
+        const msgContainer = document.getElementById('messages-container');
+
+        let currentUser = null;
+
+        // ログイン処理
+        loginBtn.addEventListener('click', async () => {
+            try {
+                await signInWithPopup(auth, provider);
+            } catch (error) {
+                console.error("Login failed", error);
+            }
+        });
+
+        // ログアウト処理
+        logoutBtn.addEventListener('click', () => signOut(auth));
+
+        // 認証状態の監視
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                currentUser = user;
+                loginScreen.style.display = 'none';
+                chatScreen.style.display = 'block';
+                loadMessages(); // ログインしたらメッセージを読み込む
+            } else {
+                currentUser = null;
+                loginScreen.style.display = 'block';
+                chatScreen.style.display = 'none';
+                msgContainer.innerHTML = ''; // ログアウトしたらクリア
+            }
+        });
+
+        // メッセージ送信
+        sendBtn.addEventListener('click', sendMessage);
+        
+        // Enterキーでも送信
+        msgInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+
+        async function sendMessage() {
+            const text = msgInput.value.trim();
+            if (!text || !currentUser) return;
+
+            try {
+                await addDoc(collection(db, "messages"), {
+                    text: text,
+                    uid: currentUser.uid,
+                    displayName: currentUser.displayName,
+                    photoURL: currentUser.photoURL,
+                    createdAt: serverTimestamp()
+                });
+                msgInput.value = '';
+            } catch (error) {
+                console.error("Error sending message: ", error);
+            }
+        }
+
+        // メッセージのリアルタイム受信
+        function loadMessages() {
+            const q = query(collection(db, "messages"), orderBy("createdAt", "asc"));
+            
+            // onSnapshotを使うと、DBが更新されるたびに自動で実行されます
+            onSnapshot(q, (snapshot) => {
+                msgContainer.innerHTML = ''; // 一度クリア（最適化の余地あり）
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    const div = document.createElement('div');
+                    const isMyMessage = data.uid === currentUser.uid;
+                    
+                    div.className = `message ${isMyMessage ? 'my-message' : ''}`;
+                    div.innerHTML = `
+                        <div>
+                            <img src="${data.photoURL}" class="avatar">
+                            <span class="meta">${data.displayName}</span>
+                        </div>
+                        <div style="margin-top:5px; font-size:1.2em;">${escapeHTML(data.text)}</div>
+                    `;
+                    msgContainer.appendChild(div);
+                });
+                // 最新メッセージまでスクロール
+                msgContainer.scrollTop = msgContainer.scrollHeight;
+            });
+        }
+
+        // XSS対策用
+        function escapeHTML(str) {
+            return str.replace(/[&<>'"]/g, 
+                tag => ({
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    "'": '&#39;',
+                    '"': '&quot;'
+                }[tag]));
+        }
+    </script>
+</body>
+</html>
