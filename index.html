@@ -1,170 +1,63 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="ja" class="h-full">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Group Chat Prototype</title>
-    <style>
-        /* 簡単なスタイル */
-        body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; }
-        #chat-screen { display: none; }
-        .message { border-bottom: 1px solid #ccc; padding: 10px 0; }
-        .my-message { text-align: right; background-color: #e0f7fa; }
-        .meta { font-size: 0.8em; color: gray; }
-        #input-area { margin-top: 20px; display: flex; gap: 10px; }
-        input { flex-grow: 1; padding: 10px; }
-        button { padding: 10px 20px; cursor: pointer; }
-        img.avatar { width: 30px; height: 30px; border-radius: 50%; vertical-align: middle; }
-    </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Blue Chat</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
 </head>
-<body>
+<body class="h-full bg-slate-50 flex items-center justify-center text-slate-700">
 
-    <div id="login-screen">
-        <h1>チャットアプリへようこそ</h1>
-        <button id="login-btn">Googleでログイン</button>
-    </div>
+    <div class="w-full h-full md:h-[85vh] md:max-w-md bg-white md:rounded-3xl shadow-2xl overflow-hidden flex flex-col relative border border-slate-100">
 
-    <div id="chat-screen">
-        <header style="display: flex; justify-content: space-between; align-items: center;">
-            <h2>グループチャット</h2>
-            <button id="logout-btn">ログアウト</button>
-        </header>
-        
-        <div id="messages-container" style="height: 400px; overflow-y: scroll; border: 1px solid #ddd; padding: 10px;">
+        <div id="login-screen" class="absolute inset-0 z-50 bg-white flex flex-col items-center justify-center p-8 transition-opacity duration-500">
+            <div class="w-20 h-20 bg-blue-500 rounded-2xl flex items-center justify-center mb-6 shadow-lg shadow-blue-200">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-10 h-10 text-white">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 01-.825-.242m9.345-8.334a2.126 2.126 0 00-.476-.095 48.64 48.64 0 00-8.048 0c-1.18.063-2.33.12-3.45.164m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0011.25 3c-2.115 0-4.198.137-6.197.397-1.608.209-2.76 1.614-2.76 3.235v1.81A25.11 25.11 0 002.23 13.041l-.63 6.6a1.125 1.125 0 001.29 1.196c.096-.01.192-.023.287-.04l5.63-1.057a49.19 49.19 0 0110.151-.836c.925-.065 1.76-.717 1.942-1.631l1.55-7.75a1.866 1.866 0 00-1.25-2.132z" />
+                </svg>
             </div>
+            
+            <h1 class="text-2xl font-bold mb-2 text-slate-800">Welcome Back</h1>
+            <p class="mb-10 text-slate-400 text-sm">グループチャットへログインしてください</p>
+            
+            <button id="login-btn" class="w-full max-w-xs bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 font-bold py-3 px-6 rounded-xl shadow-sm hover:shadow transition flex items-center justify-center gap-3">
+                <img src="https://www.svgrepo.com/show/475656/google-color.svg" class="w-5 h-5" alt="Google">
+                Googleで続ける
+            </button>
+        </div>
 
-        <div id="input-area">
-            <input type="text" id="message-input" placeholder="メッセージを入力...">
-            <button id="send-btn">送信</button>
+        <div id="chat-screen" class="flex-1 flex flex-col h-full hidden opacity-0 transition-opacity duration-500">
+            <header class="bg-white/90 backdrop-blur-md border-b border-slate-100 px-5 py-4 flex justify-between items-center z-10 sticky top-0">
+                <div>
+                    <h2 class="font-bold text-lg text-slate-800">Blue Chat</h2>
+                    <p class="text-xs text-blue-500 font-medium flex items-center gap-1">
+                        <span class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
+                        オンライン
+                    </p>
+                </div>
+                <button id="logout-btn" class="text-xs font-bold text-slate-400 hover:text-red-500 transition">ログアウト</button>
+            </header>
+            
+            <div id="messages-container" class="flex-1 overflow-y-auto p-4 space-y-6 bg-slate-50">
+                </div>
+
+            <div class="bg-white p-4 pb-6 md:pb-4 border-t border-slate-100">
+                <div class="flex items-end gap-2 bg-slate-100 p-2 rounded-[1.5rem] focus-within:ring-2 focus-within:ring-blue-100 transition-shadow">
+                    <textarea id="message-input" rows="1" placeholder="メッセージを入力..." class="flex-1 bg-transparent border-0 resize-none px-4 py-3 focus:ring-0 focus:outline-none text-slate-700 placeholder-slate-400 max-h-32"></textarea>
+                    <button id="send-btn" class="bg-blue-600 hover:bg-blue-700 text-white rounded-full w-10 h-10 flex items-center justify-center shrink-0 transition-colors shadow-md shadow-blue-200 disabled:opacity-50 disabled:cursor-not-allowed mb-1 mr-1">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5 translate-x-0.5">
+                          <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 
-    <script type="module">
-        // Import the functions you need from the SDKs you need
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } 
-            from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, serverTimestamp } 
-            from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-
-        // TODO: ここをご自身のFirebase設定に書き換えてください
-        const firebaseConfig = {
-        apiKey: "AIzaSyCY9Lzf8ooRT6-yfjG8yP8nNxMYba45BmE",
-        authDomain: "gdgschuo-chat.firebaseapp.com",
-        projectId: "gdgschuo-chat",
-        storageBucket: "gdgschuo-chat.firebasestorage.app",
-        messagingSenderId: "25562541212",
-        appId: "1:25562541212:web:c2c7dcc68e0a672e7f9159"
-        };
-
-        // Initialize Firebase
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-        const provider = new GoogleAuthProvider();
-
-        // DOM Elements
-        const loginScreen = document.getElementById('login-screen');
-        const chatScreen = document.getElementById('chat-screen');
-        const loginBtn = document.getElementById('login-btn');
-        const logoutBtn = document.getElementById('logout-btn');
-        const sendBtn = document.getElementById('send-btn');
-        const msgInput = document.getElementById('message-input');
-        const msgContainer = document.getElementById('messages-container');
-
-        let currentUser = null;
-
-        // ログイン処理
-        loginBtn.addEventListener('click', async () => {
-            try {
-                await signInWithPopup(auth, provider);
-            } catch (error) {
-                console.error("Login failed", error);
-            }
-        });
-
-        // ログアウト処理
-        logoutBtn.addEventListener('click', () => signOut(auth));
-
-        // 認証状態の監視
-        onAuthStateChanged(auth, (user) => {
-            if (user) {
-                currentUser = user;
-                loginScreen.style.display = 'none';
-                chatScreen.style.display = 'block';
-                loadMessages(); // ログインしたらメッセージを読み込む
-            } else {
-                currentUser = null;
-                loginScreen.style.display = 'block';
-                chatScreen.style.display = 'none';
-                msgContainer.innerHTML = ''; // ログアウトしたらクリア
-            }
-        });
-
-        // メッセージ送信
-        sendBtn.addEventListener('click', sendMessage);
-        
-        // Enterキーでも送信
-        msgInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') sendMessage();
-        });
-
-        async function sendMessage() {
-            const text = msgInput.value.trim();
-            if (!text || !currentUser) return;
-
-            try {
-                await addDoc(collection(db, "messages"), {
-                    text: text,
-                    uid: currentUser.uid,
-                    displayName: currentUser.displayName,
-                    photoURL: currentUser.photoURL,
-                    createdAt: serverTimestamp()
-                });
-                msgInput.value = '';
-            } catch (error) {
-                console.error("Error sending message: ", error);
-            }
-        }
-
-        // メッセージのリアルタイム受信
-        function loadMessages() {
-            const q = query(collection(db, "messages"), orderBy("createdAt", "asc"));
-            
-            // onSnapshotを使うと、DBが更新されるたびに自動で実行されます
-            onSnapshot(q, (snapshot) => {
-                msgContainer.innerHTML = ''; // 一度クリア（最適化の余地あり）
-                snapshot.forEach((doc) => {
-                    const data = doc.data();
-                    const div = document.createElement('div');
-                    const isMyMessage = data.uid === currentUser.uid;
-                    
-                    div.className = `message ${isMyMessage ? 'my-message' : ''}`;
-                    div.innerHTML = `
-                        <div>
-                            <img src="${data.photoURL}" class="avatar">
-                            <span class="meta">${data.displayName}</span>
-                        </div>
-                        <div style="margin-top:5px; font-size:1.2em;">${escapeHTML(data.text)}</div>
-                    `;
-                    msgContainer.appendChild(div);
-                });
-                // 最新メッセージまでスクロール
-                msgContainer.scrollTop = msgContainer.scrollHeight;
-            });
-        }
-
-        // XSS対策用
-        function escapeHTML(str) {
-            return str.replace(/[&<>'"]/g, 
-                tag => ({
-                    '&': '&amp;',
-                    '<': '&lt;',
-                    '>': '&gt;',
-                    "'": '&#39;',
-                    '"': '&quot;'
-                }[tag]));
-        }
-    </script>
+    <script type="module" src="script.js"></script>
 </body>
 </html>
