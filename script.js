@@ -63,14 +63,13 @@ const threadSendBtn = document.getElementById('thread-send-btn');
 const threadRoomNameEl = document.getElementById('thread-room-name');
 
 let currentUser = null;
-let currentRoomId = 'general'; // チャンネルID または DMのID
+let currentRoomId = 'general';
 let currentThreadParentId = null; 
-let userCache = {}; // UID -> UserData のキャッシュ
+let userCache = {}; 
 
 let unsubscribeMsg = null;
-let unsubscribeUsers = null;
+let unsubscribeUsers = null; // サイドバーとモーダル兼用
 let unsubscribeThread = null;
-let unsubscribeDMs = null;
 
 // --- 初期化 ---
 renderChannelList();
@@ -104,8 +103,7 @@ onAuthStateChanged(auth, async (user) => {
         loginScreen.style.opacity = '0';
         setTimeout(() => loginScreen.style.display = 'none', 500);
         
-        loadAllUsers(); // ユーザー情報をキャッシュ
-        loadDMs();      // DM一覧を取得
+        loadUserListToSidebar(); // ★変更: 全ユーザーをサイドバーに読み込む
         loadMessages(currentRoomId);
     } else {
         currentUser = null;
@@ -115,7 +113,6 @@ onAuthStateChanged(auth, async (user) => {
         if (unsubscribeMsg) unsubscribeMsg();
         if (unsubscribeUsers) unsubscribeUsers();
         if (unsubscribeThread) unsubscribeThread();
-        if (unsubscribeDMs) unsubscribeDMs();
         
         msgContainer.innerHTML = '';
         closeSidebar();
@@ -138,23 +135,28 @@ function renderChannelList() {
     });
 }
 
-// DMリストの読み込み
-function loadDMs() {
-    if (unsubscribeDMs) unsubscribeDMs();
+// ★変更: 全ユーザーをサイドバーのDM欄に表示する関数
+function loadUserListToSidebar() {
+    if(unsubscribeUsers) unsubscribeUsers();
     
-    // 自分が参加しているDMを取得
-    const q = query(collection(db, "dms"), where("participants", "array-contains", currentUser.uid));
+    // 最終ログイン順に全ユーザーを取得
+    const q = query(collection(db, "users"), orderBy("lastLogin", "desc"));
     
-    unsubscribeDMs = onSnapshot(q, (snapshot) => {
-        dmListEl.innerHTML = '';
+    unsubscribeUsers = onSnapshot(q, (snapshot) => {
+        userCache = {}; // キャッシュ更新
+        dmListEl.innerHTML = ''; // リストクリア
+
         snapshot.forEach(docSnap => {
-            const data = docSnap.data();
-            const dmId = docSnap.id;
-            
-            // 相手のUIDを探す
-            const otherUid = data.participants.find(uid => uid !== currentUser.uid) || currentUser.uid;
-            const otherUser = userCache[otherUid] || { displayName: 'Unknown', photoURL: '' };
-            
+            const user = docSnap.data();
+            userCache[docSnap.id] = user;
+
+            // 自分自身はリストに表示しない
+            if (user.uid === currentUser.uid) return;
+
+            // DMのIDを計算（すでにDMがあろうがなかろうが、IDのルールは同じ）
+            const uids = [currentUser.uid, user.uid].sort();
+            const dmId = `${uids[0]}_${uids[1]}`;
+
             const btn = document.createElement('button');
             const isActive = dmId === currentRoomId;
             btn.className = `w-full text-left px-3 py-2 rounded-md mb-1 flex items-center gap-2 transition text-sm ${
@@ -162,10 +164,12 @@ function loadDMs() {
             }`;
             
             btn.innerHTML = `
-                <img src="${otherUser.photoURL}" class="w-5 h-5 rounded-full bg-slate-500 opacity-80">
-                <span class="truncate">${escapeHTML(otherUser.displayName)}</span>
+                <img src="${user.photoURL}" class="w-5 h-5 rounded-full bg-slate-500 opacity-80 object-cover">
+                <span class="truncate">${escapeHTML(user.displayName)}</span>
             `;
-            btn.onclick = () => switchRoom(dmId, otherUser.displayName);
+            
+            // クリックしたらDM開始（または移動）
+            btn.onclick = () => startDM(user);
             dmListEl.appendChild(btn);
         });
     });
@@ -175,17 +179,29 @@ function switchRoom(roomId, roomName) {
     if (currentRoomId === roomId) return;
     currentRoomId = roomId;
     
-    // ヘッダー更新
-    const isDm = roomId.includes('_'); // DMのIDにはアンダースコアが含まれるルール
+    const isDm = roomId.includes('_');
     currentRoomNameEl.innerHTML = isDm 
         ? `<span class="text-slate-400 text-sm font-normal mr-1">DM:</span> ${escapeHTML(roomName)}`
         : `<span class="text-slate-400">#</span> ${roomName}`;
 
-    // リスト再描画（ハイライト更新）
     renderChannelList();
-    // DMリストはonSnapshotで更新されるが、ハイライトのため強制再描画した方が良いが省略
-    // (実用上はCSSクラスの付け替えのみで対応するのがベストだが、今回はloadDMsが再実行されるのを待つか、簡易的に実装)
+    // サイドバーのDMリストのハイライトも更新するために再描画したいが、
+    // onSnapshotがリアルタイムで動いているので、簡易的にここでのDOM操作は省略し、
+    // ユーザーリストの更新（再読み込み）を待つか、クリック時のクラス切り替えに任せます。
+    // ※確実にハイライトを変えるなら loadUserListToSidebar 内で判定していますが、
+    //   Firestoreの更新がないと再実行されないため、ここでは簡易実装とします。
     
+    // 手動でハイライト切り替え（見た目の即時反映）
+    const allButtons = dmListEl.querySelectorAll('button');
+    allButtons.forEach(btn => {
+        // ボタンのテキストと部屋名が一致するか簡易チェック
+        if(btn.innerText.includes(roomName)) {
+             btn.className = `w-full text-left px-3 py-2 rounded-md mb-1 flex items-center gap-2 transition text-sm bg-slate-700 text-white font-bold`;
+        } else {
+             btn.className = `w-full text-left px-3 py-2 rounded-md mb-1 flex items-center gap-2 transition text-sm text-slate-400 hover:bg-slate-700/50 hover:text-slate-200`;
+        }
+    });
+
     closeSidebar();
     closeThread();
     loadMessages(roomId);
@@ -193,9 +209,8 @@ function switchRoom(roomId, roomName) {
 
 // --- DM開始ロジック ---
 async function startDM(targetUser) {
-    if (targetUser.uid === currentUser.uid) return; // 自分自身とはDM不可（あるいはメモ機能として許可してもよい）
+    if (targetUser.uid === currentUser.uid) return;
 
-    // DM IDの生成 (UIDをソートして結合することで、どちらから開始しても同じ部屋になる)
     const uids = [currentUser.uid, targetUser.uid].sort();
     const dmId = `${uids[0]}_${uids[1]}`;
     
@@ -206,6 +221,7 @@ async function startDM(targetUser) {
             updatedAt: serverTimestamp()
         }, { merge: true });
         
+        // モーダルが開いていれば閉じる
         usersModal.classList.add('hidden');
         usersModal.classList.remove('flex');
         
@@ -237,7 +253,6 @@ async function sendMessage() {
     if (!text || !currentUser) return;
     sendBtn.disabled = true;
 
-    // 現在の部屋がDMかチャンネルかで保存先を変える
     const isDm = currentRoomId.includes('_');
     const collectionPath = isDm ? `dms/${currentRoomId}/messages` : `rooms/${currentRoomId}/messages`;
 
@@ -259,7 +274,7 @@ async function sendMessage() {
     }
 }
 
-// --- メッセージ読み込み & 表示 (Slack風 vs LINE風) ---
+// --- メッセージ読み込み & 表示 ---
 function loadMessages(roomId) {
     if (unsubscribeMsg) { unsubscribeMsg(); unsubscribeMsg = null; }
     msgContainer.innerHTML = '';
@@ -286,7 +301,6 @@ function loadMessages(roomId) {
             const replyCount = data.replyCount || 0;
             const isMe = data.uid === currentUser.uid;
 
-            // 日付区切り
             if (currentDateString !== lastDateString) {
                 const dateDivider = document.createElement('div');
                 dateDivider.className = "relative flex items-center justify-center my-6";
@@ -304,13 +318,10 @@ function loadMessages(roomId) {
             const msgRow = document.createElement('div');
 
             if (isDm) {
-                // ============================
-                //  LINE風 (DM)
-                // ============================
+                // LINE風 (DM)
                 msgRow.className = `flex w-full ${isMe ? 'justify-end' : 'justify-start'} ${isContinuous ? 'mt-1' : 'mt-4'} fade-in`;
                 
                 if (isMe) {
-                    // 自分（右側・青吹き出し）
                     msgRow.innerHTML = `
                         <div class="max-w-[75%] flex flex-col items-end">
                             <div class="flex items-end gap-1">
@@ -322,7 +333,6 @@ function loadMessages(roomId) {
                         </div>
                     `;
                 } else {
-                    // 相手（左側・白吹き出し）
                     msgRow.innerHTML = `
                         <div class="flex items-start gap-2 max-w-[85%]">
                             ${!isContinuous ? `<img src="${data.photoURL}" class="w-8 h-8 rounded-full bg-slate-200 object-cover mt-1">` : '<div class="w-8"></div>'}
@@ -338,24 +348,21 @@ function loadMessages(roomId) {
                         </div>
                     `;
                 }
-            
             } else {
-                // ============================
-                //  Slack風 (Channel)
-                // ============================
+                // Slack風 (Channel)
                 msgRow.className = `flex gap-3 px-2 py-1 hover:bg-slate-100 transition rounded-lg group ${isContinuous ? 'mt-0' : 'mt-1'}`;
                 
-                // 返信リンク生成
                 const replyIndicator = replyCount > 0 ? `
                     <div class="mt-1 flex items-center gap-2 cursor-pointer group/reply" onclick="event.stopPropagation();">
                         <div class="flex items-center gap-1.5 px-2 py-1 rounded bg-blue-50 hover:bg-white hover:border hover:border-slate-200 hover:shadow-sm border border-transparent transition thread-link">
                             <img src="${data.photoURL}" class="w-4 h-4 rounded-sm opacity-70">
                             <span class="text-xs font-bold text-blue-600">${replyCount}件の返信</span>
+                            <span class="text-[10px] text-slate-400">を確認する</span>
                         </div>
                     </div>
                 ` : '';
 
-                const openThreadAction = () => openThread(msgId, data, false); // false = not DM
+                const openThreadAction = () => openThread(msgId, data);
 
                 if (!isContinuous) {
                     msgRow.innerHTML = `
@@ -403,25 +410,8 @@ function loadMessages(roomId) {
     });
 }
 
-// --- ユーティリティ & ユーザー管理 ---
-function loadAllUsers() {
-    if(unsubscribeUsers) unsubscribeUsers();
-    // 全ユーザーを監視してキャッシュする（サイドバーの名前表示用）
-    unsubscribeUsers = onSnapshot(collection(db, "users"), (snapshot) => {
-        userCache = {};
-        snapshot.forEach(doc => {
-            userCache[doc.id] = doc.data();
-        });
-        // DMリストを再描画（名前解決のため）
-        if (unsubscribeDMs) {
-            // 既にリスナーが動いている場合は、次のスナップショットで反映されるが、
-            // 初回表示を早くするためにここでも更新トリガーをかけたいところだが複雑になるので省略
-            // ※userCacheが更新されれば、次のloadDMs内の処理で正しい名前が出る
-        }
-    });
-}
-
-// ユーザーリスト表示（DM開始用）
+// --- ユーティリティ ---
+// メンバー一覧モーダル用（サイドバーと同じリストだが一応残す）
 usersBtn.addEventListener('click', () => {
     usersModal.classList.remove('hidden');
     usersModal.classList.add('flex');
@@ -430,7 +420,6 @@ usersBtn.addEventListener('click', () => {
 
 function renderUserListModal() {
     usersList.innerHTML = '';
-    // キャッシュから生成
     Object.values(userCache).forEach(user => {
         const isMe = user.uid === currentUser.uid;
         const div = document.createElement('div');
@@ -461,13 +450,12 @@ usersModal.addEventListener('click', (e) => {
 });
 
 
-// --- スレッド機能 (DMと共通) ---
-function openThread(messageId, parentData, isDm) {
+// --- スレッド機能 ---
+function openThread(messageId, parentData) {
     currentThreadParentId = messageId;
     threadSidebar.classList.remove('translate-x-full');
     threadSidebar.classList.add('translate-x-0');
     
-    // 部屋名表示
     const isChannel = AVAILABLE_CHANNELS.find(r => r.id === currentRoomId);
     threadRoomNameEl.textContent = isChannel ? isChannel.name : 'DM';
 
@@ -528,7 +516,6 @@ function loadThreadMessages(parentId) {
         });
         threadMsgContainer.scrollTop = threadMsgContainer.scrollHeight;
         
-        // カウント更新
         const parentPath = isDm ? `dms/${currentRoomId}/messages` : `rooms/${currentRoomId}/messages`;
         updateDoc(doc(db, parentPath, parentId), { replyCount: snapshot.size }).catch(e=>{});
     });
