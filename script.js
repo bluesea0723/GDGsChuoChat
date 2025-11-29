@@ -2,7 +2,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } 
     from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-// ★ updateDoc, increment を追加
 import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, doc, setDoc, updateDoc, increment } 
     from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
@@ -186,7 +185,7 @@ async function sendMessage() {
             displayName: currentUser.displayName,
             photoURL: currentUser.photoURL,
             createdAt: serverTimestamp(),
-            replyCount: 0 // ★追加: 返信数の初期値
+            replyCount: 0 
         });
         msgInput.value = '';
         msgInput.style.height = 'auto';
@@ -229,7 +228,7 @@ function loadMessages(roomId) {
             const data = docSnap.data();
             const msgId = docSnap.id;
             const currentDateString = formatDateLabel(data.createdAt);
-            const replyCount = data.replyCount || 0; // 返信数を取得
+            const replyCount = data.replyCount || 0;
 
             if (currentDateString !== lastDateString) {
                 const dateDivider = document.createElement('div');
@@ -251,7 +250,7 @@ function loadMessages(roomId) {
 
             const openThreadAction = () => openThread(msgId, data);
 
-            // ★返信表示用のHTML
+            // 返信表示エリア
             const replyIndicator = replyCount > 0 ? `
                 <div class="mt-1 flex items-center gap-2 cursor-pointer group/reply" onclick="event.stopPropagation();">
                     <div class="flex items-center gap-1.5 px-2 py-1 rounded bg-blue-50 hover:bg-white hover:border hover:border-slate-200 hover:shadow-sm border border-transparent transition thread-link">
@@ -273,7 +272,8 @@ function loadMessages(roomId) {
                             <span class="text-[10px] text-slate-400">${timeString}</span>
                         </div>
                         <div class="text-slate-800 text-[15px] leading-relaxed break-words whitespace-pre-wrap mt-0.5">${escapeHTML(data.text)}</div>
-                        ${replyIndicator} </div>
+                        ${replyIndicator}
+                    </div>
                     <div class="opacity-0 group-hover:opacity-100 flex items-start pt-1">
                         <button class="text-slate-400 hover:text-blue-500 p-1 rounded hover:bg-slate-200 transition reply-btn" title="スレッドで返信">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
@@ -289,7 +289,8 @@ function loadMessages(roomId) {
                     </div>
                     <div class="flex-1 min-w-0">
                         <div class="text-slate-800 text-[15px] leading-relaxed break-words whitespace-pre-wrap">${escapeHTML(data.text)}</div>
-                        ${replyIndicator} </div>
+                        ${replyIndicator}
+                    </div>
                     <div class="opacity-0 group-hover:opacity-100 flex items-start pt-0">
                         <button class="text-slate-400 hover:text-blue-500 p-1 rounded hover:bg-slate-200 transition reply-btn" title="スレッドで返信">
                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
@@ -300,11 +301,9 @@ function loadMessages(roomId) {
                 `;
             }
 
-            // アイコンクリックでスレッドを開く
             const btn = msgRow.querySelector('.reply-btn');
             if(btn) btn.onclick = openThreadAction;
             
-            // 「n件の返信」クリックでもスレッドを開く
             const link = msgRow.querySelector('.thread-link');
             if(link) link.onclick = openThreadAction;
 
@@ -324,7 +323,6 @@ function openThread(messageId, parentData) {
     threadSidebar.classList.remove('translate-x-full');
     threadSidebar.classList.add('translate-x-0');
     
-    // 部屋名セット
     const room = AVAILABLE_ROOMS.find(r => r.id === currentRoomId);
     threadRoomNameEl.textContent = room ? room.name : '';
 
@@ -387,6 +385,15 @@ function loadThreadMessages(parentId) {
         });
         
         threadMsgContainer.scrollTop = threadMsgContainer.scrollHeight;
+
+        // ★追加: スレッドが開かれたタイミングで、親メッセージの返信数を正しい件数に上書き同期する
+        if (parentId) {
+            const parentRef = doc(db, "rooms", currentRoomId, "messages", parentId);
+            // 実際のスレッドメッセージ数(snapshot.size)で上書き
+            updateDoc(parentRef, { replyCount: snapshot.size }).catch(err => {
+                console.log("Count sync skipped:", err);
+            });
+        }
     });
 }
 
@@ -405,7 +412,6 @@ async function sendThreadMessage() {
 
     threadSendBtn.disabled = true;
     try {
-        // 1. スレッドメッセージを追加
         await addDoc(collection(db, "rooms", currentRoomId, "messages", currentThreadParentId, "thread"), {
             text: text,
             uid: currentUser.uid,
@@ -414,7 +420,6 @@ async function sendThreadMessage() {
             createdAt: serverTimestamp()
         });
 
-        // 2. ★追加: 親メッセージの replyCount をインクリメント
         const parentRef = doc(db, "rooms", currentRoomId, "messages", currentThreadParentId);
         await updateDoc(parentRef, {
             replyCount: increment(1)
