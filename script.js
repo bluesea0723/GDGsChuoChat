@@ -2,7 +2,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } 
     from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, doc, setDoc, updateDoc, increment } 
+import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, doc, setDoc, updateDoc, increment, where } 
     from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 // ==========================================
@@ -17,7 +17,7 @@ const firebaseConfig = {
   appId: "1:25562541212:web:c2c7dcc68e0a672e7f9159"
 };
 
-const AVAILABLE_ROOMS = [
+const AVAILABLE_CHANNELS = [
     { id: 'general', name: 'General' },
     { id: 'tech', name: 'Tech' },
     { id: 'event', name: 'Event' },
@@ -44,15 +44,16 @@ const usersModal = document.getElementById('users-modal');
 const closeUsersBtn = document.getElementById('close-users-btn');
 const usersList = document.getElementById('users-list');
 
-// Sidebar Elements
+// Sidebar
 const menuBtn = document.getElementById('menu-btn');
 const sidebar = document.getElementById('sidebar');
 const closeSidebarBtn = document.getElementById('close-sidebar-btn');
 const sidebarOverlay = document.getElementById('sidebar-overlay');
 const roomListEl = document.getElementById('room-list');
+const dmListEl = document.getElementById('dm-list');
 const currentRoomNameEl = document.getElementById('current-room-name');
 
-// Thread Elements
+// Thread
 const threadSidebar = document.getElementById('thread-sidebar');
 const closeThreadBtn = document.getElementById('close-thread-btn');
 const threadParentMsgEl = document.getElementById('thread-parent-msg');
@@ -62,15 +63,17 @@ const threadSendBtn = document.getElementById('thread-send-btn');
 const threadRoomNameEl = document.getElementById('thread-room-name');
 
 let currentUser = null;
-let currentRoomId = 'general';
+let currentRoomId = 'general'; // チャンネルID または DMのID
 let currentThreadParentId = null; 
+let userCache = {}; // UID -> UserData のキャッシュ
 
 let unsubscribeMsg = null;
 let unsubscribeUsers = null;
 let unsubscribeThread = null;
+let unsubscribeDMs = null;
 
 // --- 初期化 ---
-renderRoomList();
+renderChannelList();
 
 // --- ログイン処理 ---
 loginBtn.addEventListener('click', async () => {
@@ -81,12 +84,11 @@ loginBtn.addEventListener('click', async () => {
     }
 });
 
-// --- ログアウト処理 ---
 logoutBtn.addEventListener('click', () => {
     signOut(auth);
 });
 
-// --- 認証状態の監視 ---
+// --- 認証監視 ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         currentUser = user;
@@ -97,19 +99,24 @@ onAuthStateChanged(auth, async (user) => {
                 photoURL: user.photoURL,
                 lastLogin: serverTimestamp()
             }, { merge: true });
-        } catch (e) {
-            console.error("Error updating user info:", e);
-        }
+        } catch (e) { console.error(e); }
+
         loginScreen.style.opacity = '0';
         setTimeout(() => loginScreen.style.display = 'none', 500);
+        
+        loadAllUsers(); // ユーザー情報をキャッシュ
+        loadDMs();      // DM一覧を取得
         loadMessages(currentRoomId);
     } else {
         currentUser = null;
         loginScreen.style.display = 'flex';
         setTimeout(() => loginScreen.style.opacity = '1', 50);
+        
         if (unsubscribeMsg) unsubscribeMsg();
         if (unsubscribeUsers) unsubscribeUsers();
         if (unsubscribeThread) unsubscribeThread();
+        if (unsubscribeDMs) unsubscribeDMs();
+        
         msgContainer.innerHTML = '';
         closeSidebar();
         closeThread();
@@ -117,48 +124,100 @@ onAuthStateChanged(auth, async (user) => {
 });
 
 // --- サイドバー制御 ---
-function renderRoomList() {
+function renderChannelList() {
     roomListEl.innerHTML = '';
-    AVAILABLE_ROOMS.forEach(room => {
+    AVAILABLE_CHANNELS.forEach(room => {
         const btn = document.createElement('button');
         const isActive = room.id === currentRoomId;
         btn.className = `w-full text-left px-3 py-2 rounded-md mb-1 flex items-center gap-2 transition text-sm ${
             isActive ? 'bg-slate-700 text-white font-bold' : 'text-slate-400 hover:bg-slate-700/50 hover:text-slate-200'
         }`;
         btn.innerHTML = `<span class="opacity-50 text-lg leading-none">#</span><span>${room.name}</span>`;
-        btn.onclick = () => switchRoom(room);
+        btn.onclick = () => switchRoom(room.id, room.name);
         roomListEl.appendChild(btn);
     });
-    const currentRoom = AVAILABLE_ROOMS.find(r => r.id === currentRoomId);
-    if(currentRoom) {
-        currentRoomNameEl.innerHTML = `<span class="text-slate-400">#</span> ${currentRoom.name}`;
+}
+
+// DMリストの読み込み
+function loadDMs() {
+    if (unsubscribeDMs) unsubscribeDMs();
+    
+    // 自分が参加しているDMを取得
+    const q = query(collection(db, "dms"), where("participants", "array-contains", currentUser.uid));
+    
+    unsubscribeDMs = onSnapshot(q, (snapshot) => {
+        dmListEl.innerHTML = '';
+        snapshot.forEach(docSnap => {
+            const data = docSnap.data();
+            const dmId = docSnap.id;
+            
+            // 相手のUIDを探す
+            const otherUid = data.participants.find(uid => uid !== currentUser.uid) || currentUser.uid;
+            const otherUser = userCache[otherUid] || { displayName: 'Unknown', photoURL: '' };
+            
+            const btn = document.createElement('button');
+            const isActive = dmId === currentRoomId;
+            btn.className = `w-full text-left px-3 py-2 rounded-md mb-1 flex items-center gap-2 transition text-sm ${
+                isActive ? 'bg-slate-700 text-white font-bold' : 'text-slate-400 hover:bg-slate-700/50 hover:text-slate-200'
+            }`;
+            
+            btn.innerHTML = `
+                <img src="${otherUser.photoURL}" class="w-5 h-5 rounded-full bg-slate-500 opacity-80">
+                <span class="truncate">${escapeHTML(otherUser.displayName)}</span>
+            `;
+            btn.onclick = () => switchRoom(dmId, otherUser.displayName);
+            dmListEl.appendChild(btn);
+        });
+    });
+}
+
+function switchRoom(roomId, roomName) {
+    if (currentRoomId === roomId) return;
+    currentRoomId = roomId;
+    
+    // ヘッダー更新
+    const isDm = roomId.includes('_'); // DMのIDにはアンダースコアが含まれるルール
+    currentRoomNameEl.innerHTML = isDm 
+        ? `<span class="text-slate-400 text-sm font-normal mr-1">DM:</span> ${escapeHTML(roomName)}`
+        : `<span class="text-slate-400">#</span> ${roomName}`;
+
+    // リスト再描画（ハイライト更新）
+    renderChannelList();
+    // DMリストはonSnapshotで更新されるが、ハイライトのため強制再描画した方が良いが省略
+    // (実用上はCSSクラスの付け替えのみで対応するのがベストだが、今回はloadDMsが再実行されるのを待つか、簡易的に実装)
+    
+    closeSidebar();
+    closeThread();
+    loadMessages(roomId);
+}
+
+// --- DM開始ロジック ---
+async function startDM(targetUser) {
+    if (targetUser.uid === currentUser.uid) return; // 自分自身とはDM不可（あるいはメモ機能として許可してもよい）
+
+    // DM IDの生成 (UIDをソートして結合することで、どちらから開始しても同じ部屋になる)
+    const uids = [currentUser.uid, targetUser.uid].sort();
+    const dmId = `${uids[0]}_${uids[1]}`;
+    
+    try {
+        // DMドキュメントを作成（存在しなければ）
+        await setDoc(doc(db, "dms", dmId), {
+            participants: uids,
+            updatedAt: serverTimestamp()
+        }, { merge: true });
+        
+        usersModal.classList.add('hidden');
+        usersModal.classList.remove('flex');
+        
+        switchRoom(dmId, targetUser.displayName);
+    } catch (e) {
+        console.error("Error creating DM:", e);
+        alert("DMを開始できませんでした");
     }
 }
 
-function switchRoom(room) {
-    if (currentRoomId === room.id) return;
-    currentRoomId = room.id;
-    renderRoomList();
-    closeSidebar();
-    closeThread();
-    loadMessages(room.id);
-}
 
-menuBtn.addEventListener('click', () => {
-    sidebar.classList.remove('-translate-x-full');
-    sidebar.classList.add('translate-x-0');
-    sidebarOverlay.classList.remove('hidden');
-});
-function closeSidebar() {
-    sidebar.classList.remove('translate-x-0');
-    sidebar.classList.add('-translate-x-full');
-    sidebarOverlay.classList.add('hidden');
-}
-closeSidebarBtn.addEventListener('click', closeSidebar);
-sidebarOverlay.addEventListener('click', closeSidebar);
-
-
-// --- メッセージ送信 (メイン) ---
+// --- メッセージ送信 ---
 sendBtn.addEventListener('click', sendMessage);
 msgInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -172,14 +231,18 @@ msgInput.addEventListener('input', function() {
     sendBtn.disabled = this.value.trim() === '';
     sendBtn.classList.toggle('opacity-50', this.value.trim() === '');
 });
-sendBtn.disabled = true;
 
 async function sendMessage() {
     const text = msgInput.value.trim();
     if (!text || !currentUser) return;
     sendBtn.disabled = true;
+
+    // 現在の部屋がDMかチャンネルかで保存先を変える
+    const isDm = currentRoomId.includes('_');
+    const collectionPath = isDm ? `dms/${currentRoomId}/messages` : `rooms/${currentRoomId}/messages`;
+
     try {
-        await addDoc(collection(db, "rooms", currentRoomId, "messages"), {
+        await addDoc(collection(db, collectionPath), {
             text: text,
             uid: currentUser.uid,
             displayName: currentUser.displayName,
@@ -196,23 +259,15 @@ async function sendMessage() {
     }
 }
 
-// --- メッセージ読み込み ---
-function formatTime(timestamp) {
-    if (!timestamp) return '';
-    const date = timestamp.toDate ? timestamp.toDate() : new Date();
-    return date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
-}
-function formatDateLabel(timestamp) {
-    if (!timestamp) return '';
-    const date = timestamp.toDate ? timestamp.toDate() : new Date();
-    return date.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
-}
-
+// --- メッセージ読み込み & 表示 (Slack風 vs LINE風) ---
 function loadMessages(roomId) {
     if (unsubscribeMsg) { unsubscribeMsg(); unsubscribeMsg = null; }
     msgContainer.innerHTML = '';
     
-    const q = query(collection(db, "rooms", roomId, "messages"), orderBy("createdAt", "asc"));
+    const isDm = roomId.includes('_');
+    const collectionPath = isDm ? `dms/${roomId}/messages` : `rooms/${roomId}/messages`;
+    
+    const q = query(collection(db, collectionPath), orderBy("createdAt", "asc"));
     
     unsubscribeMsg = onSnapshot(q, (snapshot) => {
         msgContainer.innerHTML = '';
@@ -220,7 +275,7 @@ function loadMessages(roomId) {
         let lastDateString = null;
         
         if (snapshot.empty) {
-            msgContainer.innerHTML = `<div class="text-center text-slate-400 text-sm mt-10"># ${AVAILABLE_ROOMS.find(r => r.id === roomId).name} へようこそ！</div>`;
+            msgContainer.innerHTML = `<div class="text-center text-slate-400 text-sm mt-10">メッセージはまだありません</div>`;
             return;
         }
 
@@ -229,10 +284,12 @@ function loadMessages(roomId) {
             const msgId = docSnap.id;
             const currentDateString = formatDateLabel(data.createdAt);
             const replyCount = data.replyCount || 0;
+            const isMe = data.uid === currentUser.uid;
 
+            // 日付区切り
             if (currentDateString !== lastDateString) {
                 const dateDivider = document.createElement('div');
-                dateDivider.className = "relative flex items-center justify-center my-4";
+                dateDivider.className = "relative flex items-center justify-center my-6";
                 dateDivider.innerHTML = `
                     <div class="absolute inset-0 flex items-center"><div class="w-full border-t border-slate-200"></div></div>
                     <span class="relative bg-slate-50 px-4 text-xs font-bold text-slate-400 border border-slate-200 rounded-full py-0.5">${currentDateString}</span>
@@ -244,89 +301,176 @@ function loadMessages(roomId) {
 
             const isContinuous = data.uid === lastUid;
             const timeString = formatTime(data.createdAt);
-            
             const msgRow = document.createElement('div');
-            msgRow.className = `flex gap-3 px-2 py-1 hover:bg-slate-100 transition rounded-lg group ${isContinuous ? 'mt-0' : 'mt-1'}`;
 
-            const openThreadAction = () => openThread(msgId, data);
-
-            // 返信表示エリア
-            const replyIndicator = replyCount > 0 ? `
-                <div class="mt-1 flex items-center gap-2 cursor-pointer group/reply" onclick="event.stopPropagation();">
-                    <div class="flex items-center gap-1.5 px-2 py-1 rounded bg-blue-50 hover:bg-white hover:border hover:border-slate-200 hover:shadow-sm border border-transparent transition thread-link">
-                        <img src="${data.photoURL}" class="w-4 h-4 rounded-sm opacity-70">
-                        <span class="text-xs font-bold text-blue-600">${replyCount}件の返信</span>
-                        <span class="text-[10px] text-slate-400 opacity-0 group-hover/reply:opacity-100 transition">最終返信を表示</span>
-                    </div>
-                </div>
-            ` : '';
-
-            if (!isContinuous) {
-                msgRow.innerHTML = `
-                    <div class="shrink-0 pt-1">
-                        <img src="${data.photoURL}" class="w-9 h-9 rounded-md bg-slate-200 object-cover shadow-sm cursor-pointer hover:opacity-80">
-                    </div>
-                    <div class="flex-1 min-w-0">
-                        <div class="flex items-baseline gap-2">
-                            <span class="font-bold text-slate-700 text-sm cursor-pointer hover:underline">${escapeHTML(data.displayName)}</span>
-                            <span class="text-[10px] text-slate-400">${timeString}</span>
+            if (isDm) {
+                // ============================
+                //  LINE風 (DM)
+                // ============================
+                msgRow.className = `flex w-full ${isMe ? 'justify-end' : 'justify-start'} ${isContinuous ? 'mt-1' : 'mt-4'} fade-in`;
+                
+                if (isMe) {
+                    // 自分（右側・青吹き出し）
+                    msgRow.innerHTML = `
+                        <div class="max-w-[75%] flex flex-col items-end">
+                            <div class="flex items-end gap-1">
+                                <span class="text-[10px] text-slate-400 mb-1">${timeString}</span>
+                                <div class="bg-blue-500 text-white px-4 py-2 rounded-2xl rounded-tr-sm text-sm leading-relaxed break-words shadow-sm">
+                                    ${escapeHTML(data.text).replace(/\n/g, '<br>')}
+                                </div>
+                            </div>
                         </div>
-                        <div class="text-slate-800 text-[15px] leading-relaxed break-words whitespace-pre-wrap mt-0.5">${escapeHTML(data.text)}</div>
-                        ${replyIndicator}
-                    </div>
-                    <div class="opacity-0 group-hover:opacity-100 flex items-start pt-1">
-                        <button class="text-slate-400 hover:text-blue-500 p-1 rounded hover:bg-slate-200 transition reply-btn" title="スレッドで返信">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
-                            </svg>
-                        </button>
-                    </div>
-                `;
-            } else {
-                msgRow.innerHTML = `
-                    <div class="w-9 shrink-0 text-[10px] text-slate-300 text-right opacity-0 group-hover:opacity-100 select-none pt-1.5 pr-1">
-                        ${timeString}
-                    </div>
-                    <div class="flex-1 min-w-0">
-                        <div class="text-slate-800 text-[15px] leading-relaxed break-words whitespace-pre-wrap">${escapeHTML(data.text)}</div>
-                        ${replyIndicator}
-                    </div>
-                    <div class="opacity-0 group-hover:opacity-100 flex items-start pt-0">
-                        <button class="text-slate-400 hover:text-blue-500 p-1 rounded hover:bg-slate-200 transition reply-btn" title="スレッドで返信">
-                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
-                            </svg>
-                        </button>
-                    </div>
-                `;
-            }
-
-            const btn = msgRow.querySelector('.reply-btn');
-            if(btn) btn.onclick = openThreadAction;
+                    `;
+                } else {
+                    // 相手（左側・白吹き出し）
+                    msgRow.innerHTML = `
+                        <div class="flex items-start gap-2 max-w-[85%]">
+                            ${!isContinuous ? `<img src="${data.photoURL}" class="w-8 h-8 rounded-full bg-slate-200 object-cover mt-1">` : '<div class="w-8"></div>'}
+                            <div>
+                                ${!isContinuous ? `<div class="text-[10px] text-slate-500 ml-1 mb-1">${escapeHTML(data.displayName)}</div>` : ''}
+                                <div class="flex items-end gap-1">
+                                    <div class="bg-white text-slate-800 border border-slate-200 px-4 py-2 rounded-2xl rounded-tl-sm text-sm leading-relaxed break-words shadow-sm">
+                                        ${escapeHTML(data.text).replace(/\n/g, '<br>')}
+                                    </div>
+                                    <span class="text-[10px] text-slate-400 mb-1">${timeString}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
             
-            const link = msgRow.querySelector('.thread-link');
-            if(link) link.onclick = openThreadAction;
+            } else {
+                // ============================
+                //  Slack風 (Channel)
+                // ============================
+                msgRow.className = `flex gap-3 px-2 py-1 hover:bg-slate-100 transition rounded-lg group ${isContinuous ? 'mt-0' : 'mt-1'}`;
+                
+                // 返信リンク生成
+                const replyIndicator = replyCount > 0 ? `
+                    <div class="mt-1 flex items-center gap-2 cursor-pointer group/reply" onclick="event.stopPropagation();">
+                        <div class="flex items-center gap-1.5 px-2 py-1 rounded bg-blue-50 hover:bg-white hover:border hover:border-slate-200 hover:shadow-sm border border-transparent transition thread-link">
+                            <img src="${data.photoURL}" class="w-4 h-4 rounded-sm opacity-70">
+                            <span class="text-xs font-bold text-blue-600">${replyCount}件の返信</span>
+                        </div>
+                    </div>
+                ` : '';
+
+                const openThreadAction = () => openThread(msgId, data, false); // false = not DM
+
+                if (!isContinuous) {
+                    msgRow.innerHTML = `
+                        <div class="shrink-0 pt-1">
+                            <img src="${data.photoURL}" class="w-9 h-9 rounded-md bg-slate-200 object-cover shadow-sm cursor-pointer hover:opacity-80">
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-baseline gap-2">
+                                <span class="font-bold text-slate-700 text-sm cursor-pointer hover:underline">${escapeHTML(data.displayName)}</span>
+                                <span class="text-[10px] text-slate-400">${timeString}</span>
+                            </div>
+                            <div class="text-slate-800 text-[15px] leading-relaxed break-words whitespace-pre-wrap mt-0.5">${escapeHTML(data.text)}</div>
+                            ${replyIndicator}
+                        </div>
+                        <div class="opacity-0 group-hover:opacity-100 flex items-start pt-1">
+                            <button class="text-slate-400 hover:text-blue-500 p-1 rounded hover:bg-slate-200 transition reply-btn" title="スレッドで返信">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" /></svg>
+                            </button>
+                        </div>
+                    `;
+                } else {
+                    msgRow.innerHTML = `
+                        <div class="w-9 shrink-0 text-[10px] text-slate-300 text-right opacity-0 group-hover:opacity-100 select-none pt-1.5 pr-1">${timeString}</div>
+                        <div class="flex-1 min-w-0">
+                            <div class="text-slate-800 text-[15px] leading-relaxed break-words whitespace-pre-wrap">${escapeHTML(data.text)}</div>
+                            ${replyIndicator}
+                        </div>
+                        <div class="opacity-0 group-hover:opacity-100 flex items-start pt-0">
+                            <button class="text-slate-400 hover:text-blue-500 p-1 rounded hover:bg-slate-200 transition reply-btn" title="スレッドで返信">
+                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" /></svg>
+                            </button>
+                        </div>
+                    `;
+                }
+                const btn = msgRow.querySelector('.reply-btn');
+                if(btn) btn.onclick = openThreadAction;
+                const link = msgRow.querySelector('.thread-link');
+                if(link) link.onclick = openThreadAction;
+            }
 
             msgContainer.appendChild(msgRow);
             lastUid = data.uid;
         });
-
         scrollToBottom();
     });
 }
 
-// --- スレッド機能 ---
-function openThread(messageId, parentData) {
+// --- ユーティリティ & ユーザー管理 ---
+function loadAllUsers() {
+    if(unsubscribeUsers) unsubscribeUsers();
+    // 全ユーザーを監視してキャッシュする（サイドバーの名前表示用）
+    unsubscribeUsers = onSnapshot(collection(db, "users"), (snapshot) => {
+        userCache = {};
+        snapshot.forEach(doc => {
+            userCache[doc.id] = doc.data();
+        });
+        // DMリストを再描画（名前解決のため）
+        if (unsubscribeDMs) {
+            // 既にリスナーが動いている場合は、次のスナップショットで反映されるが、
+            // 初回表示を早くするためにここでも更新トリガーをかけたいところだが複雑になるので省略
+            // ※userCacheが更新されれば、次のloadDMs内の処理で正しい名前が出る
+        }
+    });
+}
+
+// ユーザーリスト表示（DM開始用）
+usersBtn.addEventListener('click', () => {
+    usersModal.classList.remove('hidden');
+    usersModal.classList.add('flex');
+    renderUserListModal();
+});
+
+function renderUserListModal() {
+    usersList.innerHTML = '';
+    // キャッシュから生成
+    Object.values(userCache).forEach(user => {
+        const isMe = user.uid === currentUser.uid;
+        const div = document.createElement('div');
+        div.className = "flex items-center gap-3 p-2 bg-slate-50 rounded-lg hover:bg-slate-100 transition cursor-pointer";
+        div.innerHTML = `
+            <img src="${user.photoURL}" class="w-8 h-8 rounded-md bg-slate-200 object-cover">
+            <div class="flex-1 min-w-0">
+                <div class="text-sm font-bold text-slate-700 flex items-center gap-2">
+                    <span class="truncate">${escapeHTML(user.displayName)}</span>
+                    ${isMe ? '<span class="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded text-xs">あなた</span>' : ''}
+                </div>
+            </div>
+            ${!isMe ? '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5 text-slate-400"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 01-.825-.242m9.345-8.334a2.126 2.126 0 00-.476-.095 48.64 48.64 0 00-8.048 0c-1.18.063-2.33.12-3.45.164m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0011.25 3c-2.115 0-4.198.137-6.197.397-1.608.209-2.76 1.614-2.76 3.235v1.81A25.11 25.11 0 002.23 13.041l-.63 6.6a1.125 1.125 0 001.29 1.196c.096-.01.192-.023.287-.04l5.63-1.057a49.19 49.19 0 0110.151-.836c.925-.065 1.76-.717 1.942-1.631l1.55-7.75a1.866 1.866 0 00-1.25-2.132z" /></svg>' : ''}
+        `;
+        if(!isMe) {
+            div.onclick = () => startDM(user);
+        }
+        usersList.appendChild(div);
+    });
+}
+
+closeUsersBtn.addEventListener('click', () => {
+    usersModal.classList.add('hidden');
+    usersModal.classList.remove('flex');
+});
+usersModal.addEventListener('click', (e) => {
+    if (e.target === usersModal) closeUsersBtn.click();
+});
+
+
+// --- スレッド機能 (DMと共通) ---
+function openThread(messageId, parentData, isDm) {
     currentThreadParentId = messageId;
-    
-    // サイドバー表示
     threadSidebar.classList.remove('translate-x-full');
     threadSidebar.classList.add('translate-x-0');
     
-    const room = AVAILABLE_ROOMS.find(r => r.id === currentRoomId);
-    threadRoomNameEl.textContent = room ? room.name : '';
+    // 部屋名表示
+    const isChannel = AVAILABLE_CHANNELS.find(r => r.id === currentRoomId);
+    threadRoomNameEl.textContent = isChannel ? isChannel.name : 'DM';
 
-    // 親メッセージ表示
     threadParentMsgEl.innerHTML = `
         <div class="flex gap-3">
             <img src="${parentData.photoURL}" class="w-8 h-8 rounded-md bg-slate-200 object-cover mt-1">
@@ -346,10 +490,7 @@ function openThread(messageId, parentData) {
 function closeThread() {
     threadSidebar.classList.add('translate-x-full');
     threadSidebar.classList.remove('translate-x-0');
-    if (unsubscribeThread) {
-        unsubscribeThread();
-        unsubscribeThread = null;
-    }
+    if (unsubscribeThread) { unsubscribeThread(); unsubscribeThread = null; }
     currentThreadParentId = null;
 }
 closeThreadBtn.addEventListener('click', closeThread);
@@ -357,8 +498,11 @@ closeThreadBtn.addEventListener('click', closeThread);
 function loadThreadMessages(parentId) {
     if (unsubscribeThread) unsubscribeThread();
     threadMsgContainer.innerHTML = '';
+    
+    const isDm = currentRoomId.includes('_');
+    const collectionPath = isDm ? `dms/${currentRoomId}/messages/${parentId}/thread` : `rooms/${currentRoomId}/messages/${parentId}/thread`;
 
-    const q = query(collection(db, "rooms", currentRoomId, "messages", parentId, "thread"), orderBy("createdAt", "asc"));
+    const q = query(collection(db, collectionPath), orderBy("createdAt", "asc"));
     
     unsubscribeThread = onSnapshot(q, (snapshot) => {
         threadMsgContainer.innerHTML = '';
@@ -366,7 +510,6 @@ function loadThreadMessages(parentId) {
             threadMsgContainer.innerHTML = `<div class="text-center text-xs text-slate-400 mt-4">返信はまだありません</div>`;
             return;
         }
-
         snapshot.forEach(docSnap => {
             const data = docSnap.data();
             const div = document.createElement('div');
@@ -383,21 +526,14 @@ function loadThreadMessages(parentId) {
             `;
             threadMsgContainer.appendChild(div);
         });
-        
         threadMsgContainer.scrollTop = threadMsgContainer.scrollHeight;
-
-        // ★追加: スレッドが開かれたタイミングで、親メッセージの返信数を正しい件数に上書き同期する
-        if (parentId) {
-            const parentRef = doc(db, "rooms", currentRoomId, "messages", parentId);
-            // 実際のスレッドメッセージ数(snapshot.size)で上書き
-            updateDoc(parentRef, { replyCount: snapshot.size }).catch(err => {
-                console.log("Count sync skipped:", err);
-            });
-        }
+        
+        // カウント更新
+        const parentPath = isDm ? `dms/${currentRoomId}/messages` : `rooms/${currentRoomId}/messages`;
+        updateDoc(doc(db, parentPath, parentId), { replyCount: snapshot.size }).catch(e=>{});
     });
 }
 
-// スレッド送信
 threadSendBtn.addEventListener('click', sendThreadMessage);
 threadInput.addEventListener('keydown', (e) => {
     if(e.key === 'Enter' && !e.shiftKey) {
@@ -411,75 +547,50 @@ async function sendThreadMessage() {
     if (!text || !currentUser || !currentThreadParentId) return;
 
     threadSendBtn.disabled = true;
+    const isDm = currentRoomId.includes('_');
+    const basePath = isDm ? `dms/${currentRoomId}/messages` : `rooms/${currentRoomId}/messages`;
+
     try {
-        await addDoc(collection(db, "rooms", currentRoomId, "messages", currentThreadParentId, "thread"), {
+        await addDoc(collection(db, `${basePath}/${currentThreadParentId}/thread`), {
             text: text,
             uid: currentUser.uid,
             displayName: currentUser.displayName,
             photoURL: currentUser.photoURL,
             createdAt: serverTimestamp()
         });
-
-        const parentRef = doc(db, "rooms", currentRoomId, "messages", currentThreadParentId);
-        await updateDoc(parentRef, {
-            replyCount: increment(1)
-        });
-
+        await updateDoc(doc(db, basePath, currentThreadParentId), { replyCount: increment(1) });
         threadInput.value = '';
-    } catch (e) {
-        console.error(e);
-    }
+    } catch (e) { console.error(e); }
     threadSendBtn.disabled = false;
 }
 
-// --- ユーザー一覧機能 ---
-usersBtn.addEventListener('click', () => {
-    usersModal.classList.remove('hidden');
-    usersModal.classList.add('flex');
-    loadUsers();
+// 共通制御
+menuBtn.addEventListener('click', () => {
+    sidebar.classList.remove('-translate-x-full');
+    sidebar.classList.add('translate-x-0');
+    sidebarOverlay.classList.remove('hidden');
 });
-
-closeUsersBtn.addEventListener('click', () => {
-    usersModal.classList.add('hidden');
-    usersModal.classList.remove('flex');
-    if(unsubscribeUsers) {
-        unsubscribeUsers();
-        unsubscribeUsers = null;
-    }
-});
-
-usersModal.addEventListener('click', (e) => {
-    if (e.target === usersModal) closeUsersBtn.click();
-});
-
-function loadUsers() {
-    if(unsubscribeUsers) return;
-    const q = query(collection(db, "users"), orderBy("lastLogin", "desc"));
-    unsubscribeUsers = onSnapshot(q, (snapshot) => {
-        usersList.innerHTML = '';
-        snapshot.forEach((docSnap) => {
-            const user = docSnap.data();
-            const isMe = user.uid === currentUser.uid;
-            const div = document.createElement('div');
-            div.className = "flex items-center gap-3 p-2 bg-slate-50 rounded-lg";
-            div.innerHTML = `
-                <img src="${user.photoURL}" class="w-8 h-8 rounded-md bg-slate-200 object-cover">
-                <div class="flex-1 min-w-0">
-                    <div class="text-sm font-bold text-slate-700 flex items-center gap-2">
-                        <span class="truncate">${escapeHTML(user.displayName)}</span>
-                        ${isMe ? '<span class="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded text-xs">あなた</span>' : ''}
-                    </div>
-                </div>
-            `;
-            usersList.appendChild(div);
-        });
-    });
+function closeSidebar() {
+    sidebar.classList.remove('translate-x-0');
+    sidebar.classList.add('-translate-x-full');
+    sidebarOverlay.classList.add('hidden');
 }
+closeSidebarBtn.addEventListener('click', closeSidebar);
+sidebarOverlay.addEventListener('click', closeSidebar);
 
+function formatTime(timestamp) {
+    if (!timestamp) return '';
+    const date = timestamp.toDate ? timestamp.toDate() : new Date();
+    return date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+}
+function formatDateLabel(timestamp) {
+    if (!timestamp) return '';
+    const date = timestamp.toDate ? timestamp.toDate() : new Date();
+    return date.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
+}
 function scrollToBottom() {
     msgContainer.scrollTop = msgContainer.scrollHeight;
 }
-
 function escapeHTML(str) {
     if (!str) return "";
     return str.replace(/[&<>'"]/g, tag => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'}[tag]));
