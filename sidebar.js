@@ -52,7 +52,7 @@ function startStatusListener() {
     });
 }
 
-// ★変更: オンライン表示の更新ロジック
+// オンライン表示の更新ロジック
 function updateOnlineIndicators() {
     Array.from(dmListEl.children).forEach(btn => {
         const uid = btn.dataset.uid;
@@ -81,6 +81,7 @@ function updateOnlineIndicators() {
         
         dot.className = dotClass;
         
+        // ★重要: relativeクラスがないと丸の位置がおかしくなるため追加
         btn.classList.add('relative'); 
         btn.appendChild(dot);
     });
@@ -125,6 +126,7 @@ export function loadUserListToSidebar(onRoomSelect) {
     });
 }
 
+// ★修正: ハイライト更新時にオンライン表示も再適用する
 export function updateSidebarHighlights() {
     Array.from(roomListEl.children).forEach(btn => {
         const isActive = btn.dataset.roomId === state.currentRoomId;
@@ -135,6 +137,10 @@ export function updateSidebarHighlights() {
         const isActive = btn.dataset.roomId === state.currentRoomId;
         btn.className = getButtonClass(isActive);
     });
+    
+    // ★追加: クラスを上書きした後に、再度オンライン表示（丸ポチ）をつける
+    updateOnlineIndicators();
+
     closeSidebar();
 }
 
