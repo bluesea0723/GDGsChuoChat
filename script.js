@@ -2,7 +2,8 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } 
     from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, doc, setDoc } 
+// ★ updateDoc, increment を追加
+import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, doc, setDoc, updateDoc, increment } 
     from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 // ==========================================
@@ -52,7 +53,7 @@ const sidebarOverlay = document.getElementById('sidebar-overlay');
 const roomListEl = document.getElementById('room-list');
 const currentRoomNameEl = document.getElementById('current-room-name');
 
-// ★Thread Elements
+// Thread Elements
 const threadSidebar = document.getElementById('thread-sidebar');
 const closeThreadBtn = document.getElementById('close-thread-btn');
 const threadParentMsgEl = document.getElementById('thread-parent-msg');
@@ -63,7 +64,7 @@ const threadRoomNameEl = document.getElementById('thread-room-name');
 
 let currentUser = null;
 let currentRoomId = 'general';
-let currentThreadParentId = null; // 現在開いているスレッドの親ID
+let currentThreadParentId = null; 
 
 let unsubscribeMsg = null;
 let unsubscribeUsers = null;
@@ -140,7 +141,7 @@ function switchRoom(room) {
     currentRoomId = room.id;
     renderRoomList();
     closeSidebar();
-    closeThread(); // 部屋移動時はスレッドを閉じる
+    closeThread();
     loadMessages(room.id);
 }
 
@@ -184,7 +185,8 @@ async function sendMessage() {
             uid: currentUser.uid,
             displayName: currentUser.displayName,
             photoURL: currentUser.photoURL,
-            createdAt: serverTimestamp()
+            createdAt: serverTimestamp(),
+            replyCount: 0 // ★追加: 返信数の初期値
         });
         msgInput.value = '';
         msgInput.style.height = 'auto';
@@ -227,8 +229,8 @@ function loadMessages(roomId) {
             const data = docSnap.data();
             const msgId = docSnap.id;
             const currentDateString = formatDateLabel(data.createdAt);
-            
-            // 日付区切り
+            const replyCount = data.replyCount || 0; // 返信数を取得
+
             if (currentDateString !== lastDateString) {
                 const dateDivider = document.createElement('div');
                 dateDivider.className = "relative flex items-center justify-center my-4";
@@ -244,15 +246,23 @@ function loadMessages(roomId) {
             const isContinuous = data.uid === lastUid;
             const timeString = formatTime(data.createdAt);
             
-            // 行コンテナ: mt-1 に変更して間隔を狭く
             const msgRow = document.createElement('div');
             msgRow.className = `flex gap-3 px-2 py-1 hover:bg-slate-100 transition rounded-lg group ${isContinuous ? 'mt-0' : 'mt-1'}`;
 
-            // 返信ボタンアクション
             const openThreadAction = () => openThread(msgId, data);
 
+            // ★返信表示用のHTML
+            const replyIndicator = replyCount > 0 ? `
+                <div class="mt-1 flex items-center gap-2 cursor-pointer group/reply" onclick="event.stopPropagation();">
+                    <div class="flex items-center gap-1.5 px-2 py-1 rounded bg-blue-50 hover:bg-white hover:border hover:border-slate-200 hover:shadow-sm border border-transparent transition thread-link">
+                        <img src="${data.photoURL}" class="w-4 h-4 rounded-sm opacity-70">
+                        <span class="text-xs font-bold text-blue-600">${replyCount}件の返信</span>
+                        <span class="text-[10px] text-slate-400 opacity-0 group-hover/reply:opacity-100 transition">最終返信を表示</span>
+                    </div>
+                </div>
+            ` : '';
+
             if (!isContinuous) {
-                // 通常表示
                 msgRow.innerHTML = `
                     <div class="shrink-0 pt-1">
                         <img src="${data.photoURL}" class="w-9 h-9 rounded-md bg-slate-200 object-cover shadow-sm cursor-pointer hover:opacity-80">
@@ -263,7 +273,7 @@ function loadMessages(roomId) {
                             <span class="text-[10px] text-slate-400">${timeString}</span>
                         </div>
                         <div class="text-slate-800 text-[15px] leading-relaxed break-words whitespace-pre-wrap mt-0.5">${escapeHTML(data.text)}</div>
-                    </div>
+                        ${replyIndicator} </div>
                     <div class="opacity-0 group-hover:opacity-100 flex items-start pt-1">
                         <button class="text-slate-400 hover:text-blue-500 p-1 rounded hover:bg-slate-200 transition reply-btn" title="スレッドで返信">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
@@ -273,14 +283,13 @@ function loadMessages(roomId) {
                     </div>
                 `;
             } else {
-                // 連続投稿
                 msgRow.innerHTML = `
                     <div class="w-9 shrink-0 text-[10px] text-slate-300 text-right opacity-0 group-hover:opacity-100 select-none pt-1.5 pr-1">
                         ${timeString}
                     </div>
                     <div class="flex-1 min-w-0">
                         <div class="text-slate-800 text-[15px] leading-relaxed break-words whitespace-pre-wrap">${escapeHTML(data.text)}</div>
-                    </div>
+                        ${replyIndicator} </div>
                     <div class="opacity-0 group-hover:opacity-100 flex items-start pt-0">
                         <button class="text-slate-400 hover:text-blue-500 p-1 rounded hover:bg-slate-200 transition reply-btn" title="スレッドで返信">
                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
@@ -291,9 +300,13 @@ function loadMessages(roomId) {
                 `;
             }
 
-            // イベント付与
+            // アイコンクリックでスレッドを開く
             const btn = msgRow.querySelector('.reply-btn');
             if(btn) btn.onclick = openThreadAction;
+            
+            // 「n件の返信」クリックでもスレッドを開く
+            const link = msgRow.querySelector('.thread-link');
+            if(link) link.onclick = openThreadAction;
 
             msgContainer.appendChild(msgRow);
             lastUid = data.uid;
@@ -329,7 +342,6 @@ function openThread(messageId, parentData) {
         </div>
     `;
 
-    // スレッド読み込み
     loadThreadMessages(messageId);
 }
 
@@ -348,7 +360,6 @@ function loadThreadMessages(parentId) {
     if (unsubscribeThread) unsubscribeThread();
     threadMsgContainer.innerHTML = '';
 
-    // サブコレクションを参照
     const q = query(collection(db, "rooms", currentRoomId, "messages", parentId, "thread"), orderBy("createdAt", "asc"));
     
     unsubscribeThread = onSnapshot(q, (snapshot) => {
@@ -375,7 +386,6 @@ function loadThreadMessages(parentId) {
             threadMsgContainer.appendChild(div);
         });
         
-        // スレッド最下部へスクロール
         threadMsgContainer.scrollTop = threadMsgContainer.scrollHeight;
     });
 }
@@ -395,7 +405,7 @@ async function sendThreadMessage() {
 
     threadSendBtn.disabled = true;
     try {
-        // 親メッセージの下の thread コレクションに追加
+        // 1. スレッドメッセージを追加
         await addDoc(collection(db, "rooms", currentRoomId, "messages", currentThreadParentId, "thread"), {
             text: text,
             uid: currentUser.uid,
@@ -403,6 +413,13 @@ async function sendThreadMessage() {
             photoURL: currentUser.photoURL,
             createdAt: serverTimestamp()
         });
+
+        // 2. ★追加: 親メッセージの replyCount をインクリメント
+        const parentRef = doc(db, "rooms", currentRoomId, "messages", currentThreadParentId);
+        await updateDoc(parentRef, {
+            replyCount: increment(1)
+        });
+
         threadInput.value = '';
     } catch (e) {
         console.error(e);
