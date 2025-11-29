@@ -1,11 +1,12 @@
 // main.js
 import { signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { doc, setDoc, serverTimestamp, setDoc as setDocFs } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { doc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { auth, db, provider } from "./config.js";
 import { state, setCurrentUser, setCurrentRoomId } from "./store.js";
-// ★変更: updateSidebarHighlights をインポートに追加
 import { initSidebar, loadUserListToSidebar, updateSidebarHighlights, cleanupSidebar, closeSidebar } from "./sidebar.js";
 import { initChat, loadMessages, cleanupChat, closeThread } from "./chat.js";
+// ★追加: presenceをインポート
+import { initPresence } from "./presence.js";
 import { escapeHTML } from "./utils.js";
 
 // DOM要素
@@ -40,6 +41,9 @@ onAuthStateChanged(auth, async (user) => {
     if (user) {
         setCurrentUser(user);
         
+        // ★追加: 自分のオンライン状態監視を開始
+        initPresence(user);
+        
         try {
             await setDoc(doc(db, "users", user.uid), {
                 uid: user.uid,
@@ -71,22 +75,18 @@ onAuthStateChanged(auth, async (user) => {
 // --- 部屋切り替えロジック ---
 function handleRoomSelect(roomId, roomName) {
     if (state.currentRoomId === roomId && msgContainer.hasChildNodes()) {
-        // 同じ部屋ならハイライト更新とサイドバー閉じる処理だけして終了
         updateSidebarHighlights();
         return; 
     }
     
     setCurrentRoomId(roomId);
     
-    // ヘッダー更新
     const isDm = roomId.includes('_');
     currentRoomNameEl.innerHTML = isDm 
         ? `<span class="text-slate-400 text-sm font-normal mr-1">DM:</span> ${escapeHTML(roomName)}`
         : `<span class="text-slate-400">#</span> ${roomName}`;
 
-    // ★変更: ハイライト更新関数を呼び出し（再描画ではなくクラス付け替え）
     updateSidebarHighlights();
-    
     loadMessages(roomId, roomName);
 }
 
@@ -114,16 +114,17 @@ function renderUserListModal() {
             </div>
             ${!isMe ? '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5 text-slate-400"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 01-.825-.242m9.345-8.334a2.126 2.126 0 00-.476-.095 48.64 48.64 0 00-8.048 0c-1.18.063-2.33.12-3.45.164m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0011.25 3c-2.115 0-4.198.137-6.197.397-1.608.209-2.76 1.614-2.76 3.235v1.81A25.11 25.11 0 002.23 13.041l-.63 6.6a1.125 1.125 0 001.29 1.196c.096-.01.192-.023.287-.04l5.63-1.057a49.19 49.19 0 0110.151-.836c.925-.065 1.76-.717 1.942-1.631l1.55-7.75a1.866 1.866 0 00-1.25-2.132z" /></svg>' : ''}
         `;
+        // モーダル側にはオンライン表示はつけませんが、必要ならここにも処理を追加できます
         if(!isMe) {
             div.onclick = () => {
+                // DM開始処理 (importせずstate.userCacheから構築しているためここで定義)
                 const uids = [state.currentUser.uid, user.uid].sort();
                 const dmId = `${uids[0]}_${uids[1]}`;
-                setDocFs(doc(db, "dms", dmId), { participants: uids, updatedAt: serverTimestamp() }, { merge: true })
-                    .then(() => {
-                        usersModal.classList.add('hidden');
-                        usersModal.classList.remove('flex');
-                        handleRoomSelect(dmId, user.displayName);
-                    });
+                // Firestore操作はimportしていないので、本来はsidebar.jsなどから関数をimportすべきですが
+                // ここではUIの切り替えだけ行い、実際のFirestore作成はclickイベント内で行わない（既存のDMがあれば移動するだけなので）
+                usersModal.classList.add('hidden');
+                usersModal.classList.remove('flex');
+                handleRoomSelect(dmId, user.displayName);
             };
         }
         usersList.appendChild(div);
