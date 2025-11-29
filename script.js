@@ -17,7 +17,7 @@ const firebaseConfig = {
   appId: "1:25562541212:web:c2c7dcc68e0a672e7f9159"
 };
 
-// ★変更: チャンネルリストの更新
+// チャンネルリスト
 const AVAILABLE_ROOMS = [
     { id: 'general', name: 'General' },
     { id: 'tech', name: 'Tech' },
@@ -91,7 +91,6 @@ onAuthStateChanged(auth, async (user) => {
             console.error("Error updating user info:", e);
         }
 
-        // ログイン画面を非表示
         loginScreen.style.opacity = '0';
         setTimeout(() => {
             loginScreen.style.display = 'none';
@@ -100,7 +99,6 @@ onAuthStateChanged(auth, async (user) => {
         loadMessages(currentRoomId);
     } else {
         currentUser = null;
-        // ログイン画面を表示
         loginScreen.style.display = 'flex';
         setTimeout(() => loginScreen.style.opacity = '1', 50);
 
@@ -119,20 +117,19 @@ function renderRoomList() {
         const btn = document.createElement('button');
         const isActive = room.id === currentRoomId;
         
-        btn.className = `w-full text-left px-3 py-3 rounded-lg mb-1 flex items-center gap-3 transition ${
-            isActive ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50' : 'text-slate-400 hover:bg-slate-700/50 hover:text-slate-200'
+        btn.className = `w-full text-left px-3 py-2 rounded-md mb-1 flex items-center gap-2 transition text-sm ${
+            isActive ? 'bg-slate-700 text-white font-bold' : 'text-slate-400 hover:bg-slate-700/50 hover:text-slate-200'
         }`;
         
         btn.innerHTML = `
-            <span class="${isActive ? 'text-blue-200' : 'text-slate-600'} font-bold">#</span>
-            <span class="font-medium">${room.name}</span>
+            <span class="opacity-50 text-lg leading-none">#</span>
+            <span>${room.name}</span>
         `;
         
         btn.onclick = () => switchRoom(room);
         roomListEl.appendChild(btn);
     });
     
-    // 現在のルーム名をヘッダーにセット
     const currentRoom = AVAILABLE_ROOMS.find(r => r.id === currentRoomId);
     if(currentRoom) {
         currentRoomNameEl.innerHTML = `<span class="text-slate-400">#</span> ${currentRoom.name}`;
@@ -223,10 +220,10 @@ function formatTime(timestamp) {
 function formatDateLabel(timestamp) {
     if (!timestamp) return '';
     const date = timestamp.toDate ? timestamp.toDate() : new Date();
-    return date.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
+    return date.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
 }
 
-// --- メッセージ読み込み ---
+// --- メッセージ読み込み (Slack/Discordスタイル) ---
 function loadMessages(roomId) {
     if (unsubscribeMsg) {
         unsubscribeMsg();
@@ -249,7 +246,7 @@ function loadMessages(roomId) {
         let lastDateString = null;
         
         if (snapshot.empty) {
-            msgContainer.innerHTML = `<div class="text-center text-slate-400 text-sm mt-10">まだメッセージはありません。<br>一番乗りで挨拶してみましょう！</div>`;
+            msgContainer.innerHTML = `<div class="text-center text-slate-400 text-sm mt-10"># ${AVAILABLE_ROOMS.find(r => r.id === roomId).name} へようこそ！<br>最初のメッセージを投稿しましょう。</div>`;
             return;
         }
 
@@ -257,50 +254,53 @@ function loadMessages(roomId) {
             const data = doc.data();
             const currentDateString = formatDateLabel(data.createdAt);
             
+            // 日付区切り線
             if (currentDateString !== lastDateString) {
                 const dateDivider = document.createElement('div');
-                dateDivider.className = "flex justify-center my-6 fade-in";
+                dateDivider.className = "relative flex items-center justify-center my-6";
                 dateDivider.innerHTML = `
-                    <span class="bg-slate-200/80 text-slate-500 text-xs px-3 py-1 rounded-full shadow-sm">
+                    <div class="absolute inset-0 flex items-center">
+                        <div class="w-full border-t border-slate-200"></div>
+                    </div>
+                    <span class="relative bg-slate-50 px-4 text-xs font-bold text-slate-400 border border-slate-200 rounded-full py-0.5">
                         ${currentDateString}
                     </span>
                 `;
                 msgContainer.appendChild(dateDivider);
                 lastDateString = currentDateString;
-                lastUid = null;
+                lastUid = null; // 日付が変わったらヘッダーを出し直す
             }
 
-            const isMyMessage = data.uid === currentUser.uid;
+            // 連続投稿の判定 (同じユーザーかつ時間が1分以内ならまとめる等のロジックも可能だが、今回はシンプルにUID一致で判定)
             const isContinuous = data.uid === lastUid;
             const timeString = formatTime(data.createdAt);
 
             const msgRow = document.createElement('div');
-            msgRow.className = `flex w-full ${isMyMessage ? 'justify-end' : 'justify-start'} ${isContinuous ? 'mt-1' : 'mt-4'} fade-in`;
+            // Slackライクな行デザイン (全メッセージ左寄せ)
+            msgRow.className = `flex gap-3 px-2 py-1 hover:bg-slate-100 transition rounded-lg group ${isContinuous ? 'mt-0' : 'mt-2'}`;
 
-            if (isMyMessage) {
+            if (!isContinuous) {
+                // === 新しい投稿ブロック（アイコン＋名前＋メッセージ） ===
                 msgRow.innerHTML = `
-                    <div class="max-w-[85%] md:max-w-[70%]">
-                        <div class="bg-blue-600 text-white px-4 py-2 rounded-2xl rounded-tr-sm shadow-sm text-sm leading-relaxed break-words">
-                            ${escapeHTML(data.text).replace(/\n/g, '<br>')}
+                    <div class="shrink-0 pt-1">
+                        <img src="${data.photoURL}" class="w-9 h-9 rounded-md bg-slate-200 object-cover shadow-sm cursor-pointer hover:opacity-80">
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-baseline gap-2">
+                            <span class="font-bold text-slate-700 text-sm cursor-pointer hover:underline">${escapeHTML(data.displayName)}</span>
+                            <span class="text-[10px] text-slate-400">${timeString}</span>
                         </div>
-                        <div class="text-[10px] text-slate-400 text-right mt-1 mr-1">
-                            ${timeString}
-                        </div>
+                        <div class="text-slate-800 text-[15px] leading-relaxed break-words whitespace-pre-wrap mt-0.5">${escapeHTML(data.text)}</div>
                     </div>
                 `;
             } else {
+                // === 連続投稿（左側のスペースを空けてメッセージのみ表示、時刻はホバーで表示したいが今回は簡易的に左横に配置） ===
                 msgRow.innerHTML = `
-                    <div class="flex items-end gap-2 max-w-[90%] md:max-w-[80%]">
-                        ${!isContinuous ? `<img src="${data.photoURL}" class="w-8 h-8 rounded-full shadow-sm mb-6 bg-slate-200 object-cover shrink-0">` : '<div class="w-8 shrink-0"></div>'}
-                        <div class="min-w-0">
-                            ${!isContinuous ? `<div class="text-[11px] text-slate-500 ml-1 mb-1 truncate">${escapeHTML(data.displayName)}</div>` : ''}
-                            <div class="bg-white text-slate-800 border border-slate-100 px-4 py-2 rounded-2xl rounded-tl-sm shadow-sm text-sm leading-relaxed break-words">
-                                ${escapeHTML(data.text).replace(/\n/g, '<br>')}
-                            </div>
-                            <div class="text-[10px] text-slate-400 ml-1 mt-1">
-                                ${timeString}
-                            </div>
-                        </div>
+                    <div class="w-9 shrink-0 text-[10px] text-slate-300 text-right opacity-0 group-hover:opacity-100 select-none pt-1.5 pr-1">
+                        ${timeString}
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <div class="text-slate-800 text-[15px] leading-relaxed break-words whitespace-pre-wrap">${escapeHTML(data.text)}</div>
                     </div>
                 `;
             }
@@ -347,16 +347,17 @@ function loadUsers() {
             const isMe = user.uid === currentUser.uid;
             
             const userItem = document.createElement('div');
-            userItem.className = "flex items-center gap-3 p-2 bg-slate-50 rounded-xl hover:bg-slate-100 transition";
+            userItem.className = "flex items-center gap-3 p-2 bg-slate-50 rounded-lg hover:bg-slate-100 transition cursor-pointer";
             
             userItem.innerHTML = `
-                <img src="${user.photoURL}" class="w-10 h-10 rounded-full bg-slate-200 object-cover border border-slate-200 shrink-0">
+                <img src="${user.photoURL}" class="w-8 h-8 rounded-md bg-slate-200 object-cover border border-slate-200 shrink-0">
                 <div class="flex-1 min-w-0">
                     <div class="text-sm font-bold text-slate-700 flex items-center gap-2">
                         <span class="truncate">${escapeHTML(user.displayName)}</span>
-                        ${isMe ? '<span class="text-[10px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full shrink-0">あなた</span>' : ''}
+                        ${isMe ? '<span class="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded text-xs">あなた</span>' : ''}
                     </div>
                 </div>
+                <div class="w-2 h-2 bg-green-400 rounded-full"></div>
             `;
             usersList.appendChild(userItem);
         });
