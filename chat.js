@@ -25,6 +25,19 @@ export function initChat() {
     setupChatEvents();
 }
 
+function getMyDisplayNameForChat() {
+    const uid = state.currentUser?.uid;
+    if (!uid) return "";
+
+    const me = state.userCache[uid];
+
+    return (
+        (me && me.displayNameAlias) ||   // alias があれば最優先
+        (me && me.displayName) ||        // なければ Firestore の displayName
+        state.currentUser.displayName   // 最後の保険（Auth）
+    );
+}
+
 function setupChatEvents() {
     // メイン送信
     sendBtn.addEventListener('click', sendMessage);
@@ -66,7 +79,7 @@ export async function sendMessage() {
         await addDoc(collection(db, collectionPath), {
             text: text,
             uid: state.currentUser.uid,
-            displayName: state.currentUser.displayName,
+            displayName: getMyDisplayNameForChat(),
             photoURL: state.currentUser.photoURL,
             createdAt: serverTimestamp(),
             replyCount: 0 
@@ -156,7 +169,7 @@ export function loadMessages(roomId, roomName) {
                         </div>`;
                 }
             } else {
-                // Channel (Slack風)
+                // Channel
                 msgRow.className = `flex gap-3 px-2 py-1 hover:bg-slate-100 transition rounded-lg group ${isContinuous ? 'mt-0' : 'mt-1'}`;
                 const replyIndicator = replyCount > 0 ? `
                     <div class="mt-1 flex items-center gap-2 cursor-pointer group/reply" onclick="event.stopPropagation();">
@@ -294,7 +307,7 @@ async function sendThreadMessage() {
         await addDoc(collection(db, `${basePath}/${currentThreadParentId}/thread`), {
             text: text,
             uid: state.currentUser.uid,
-            displayName: state.currentUser.displayName,
+            displayName: getMyDisplayNameForChat(),
             photoURL: state.currentUser.photoURL,
             createdAt: serverTimestamp()
         });

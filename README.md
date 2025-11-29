@@ -20,3 +20,4 @@ Google アカウントでログインし、チャンネルチャット・DM・�
 ├─ chat.js           # メインチャットの送受信、スレッド表示・投稿
 ├─ presence.js       # Realtime Database を使ったプレゼンス管理
 └─ utils.js          # 日時フォーマット、HTML エスケープ、スクロール処理
+```

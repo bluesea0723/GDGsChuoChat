@@ -5,7 +5,6 @@ import { auth, db, provider } from "./config.js";
 import { state, setCurrentUser, setCurrentRoomId } from "./store.js";
 import { initSidebar, loadUserListToSidebar, updateSidebarHighlights, cleanupSidebar, closeSidebar } from "./sidebar.js";
 import { initChat, loadMessages, cleanupChat, closeThread } from "./chat.js";
-// ★追加: presenceをインポート
 import { initPresence } from "./presence.js";
 import { escapeHTML } from "./utils.js";
 
@@ -19,6 +18,11 @@ const closeUsersBtn = document.getElementById('close-users-btn');
 const usersList = document.getElementById('users-list');
 const currentRoomNameEl = document.getElementById('current-room-name');
 const msgContainer = document.getElementById('messages-container');
+const changeNameBtn = document.getElementById('change-name-btn');
+const changeNameModal = document.getElementById('change-name-modal');
+const changeNameInput = document.getElementById('change-name-input');
+const changeNameSaveBtn = document.getElementById('change-name-save-btn');
+const changeNameCancelBtn = document.getElementById('change-name-cancel-btn');
 
 // 初期化
 initSidebar(handleRoomSelect);
@@ -41,7 +45,6 @@ onAuthStateChanged(auth, async (user) => {
     if (user) {
         setCurrentUser(user);
         
-        // ★追加: 自分のオンライン状態監視を開始
         initPresence(user);
         
         try {
@@ -98,33 +101,34 @@ usersBtn.addEventListener('click', () => {
 });
 
 function renderUserListModal() {
+    console.log("🔵 [main.js] renderUserListModal userCache =", JSON.stringify(state.userCache, null, 2));
     usersList.innerHTML = '';
     
     Object.values(state.userCache).forEach(user => {
         const isMe = user.uid === state.currentUser?.uid;
+
+        const displayNameForList =
+            user.displayNameAlias || user.displayName || '(no name)';
+
         const div = document.createElement('div');
         div.className = "flex items-center gap-3 p-2 bg-slate-50 rounded-lg hover:bg-slate-100 transition cursor-pointer";
         div.innerHTML = `
             <img src="${user.photoURL}" class="w-8 h-8 rounded-md bg-slate-200 object-cover">
             <div class="flex-1 min-w-0">
                 <div class="text-sm font-bold text-slate-700 flex items-center gap-2">
-                    <span class="truncate">${escapeHTML(user.displayName)}</span>
+                    <span class="truncate">${escapeHTML(displayNameForList)}</span>
                     ${isMe ? '<span class="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded text-xs">あなた</span>' : ''}
                 </div>
             </div>
-            ${!isMe ? '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5 text-slate-400"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 01-.825-.242m9.345-8.334a2.126 2.126 0 00-.476-.095 48.64 48.64 0 00-8.048 0c-1.18.063-2.33.12-3.45.164m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0011.25 3c-2.115 0-4.198.137-6.197.397-1.608.209-2.76 1.614-2.76 3.235v1.81A25.11 25.11 0 002.23 13.041l-.63 6.6a1.125 1.125 0 001.29 1.196c.096-.01.192-.023.287-.04l5.63-1.057a49.19 49.19 0 0110.151-.836c.925-.065 1.76-.717 1.942-1.631l1.55-7.75a1.866 1.866 0 00-1.25-2.132z" /></svg>' : ''}
+            ${!isMe ? '<svg ... 略 ... </svg>' : ''}
         `;
-        // モーダル側にはオンライン表示はつけませんが、必要ならここにも処理を追加できます
         if(!isMe) {
             div.onclick = () => {
-                // DM開始処理 (importせずstate.userCacheから構築しているためここで定義)
                 const uids = [state.currentUser.uid, user.uid].sort();
                 const dmId = `${uids[0]}_${uids[1]}`;
-                // Firestore操作はimportしていないので、本来はsidebar.jsなどから関数をimportすべきですが
-                // ここではUIの切り替えだけ行い、実際のFirestore作成はclickイベント内で行わない（既存のDMがあれば移動するだけなので）
                 usersModal.classList.add('hidden');
                 usersModal.classList.remove('flex');
-                handleRoomSelect(dmId, user.displayName);
+                handleRoomSelect(dmId, displayNameForList);
             };
         }
         usersList.appendChild(div);
@@ -135,6 +139,49 @@ closeUsersBtn.addEventListener('click', () => {
     usersModal.classList.add('hidden');
     usersModal.classList.remove('flex');
 });
+
 usersModal.addEventListener('click', (e) => {
     if (e.target === usersModal) closeUsersBtn.click();
 });
+
+changeNameBtn.addEventListener('click', () => {
+    const uid = state.currentUser.uid;
+    const me = state.userCache[uid];
+
+    changeNameInput.value =
+        me.displayNameAlias ||
+        me.displayName ||
+        state.currentUser.displayName;
+
+    changeNameModal.classList.remove('hidden');
+    changeNameModal.classList.add('flex');
+});
+
+changeNameCancelBtn.addEventListener('click', () => {
+    changeNameModal.classList.add('hidden');
+});
+
+changeNameSaveBtn.addEventListener('click', async () => {
+    const newName = changeNameInput.value.trim();
+    if (!newName) return;
+
+    const uid = state.currentUser.uid;
+
+    await setDoc(
+        doc(db, "users", uid),
+        { displayNameAlias: newName },
+        { merge: true }
+    );
+
+    if (state.userCache[uid]) {
+        state.userCache[uid].displayNameAlias = newName;
+    }
+
+    console.log("✅ [main.js] after alias save userCache =", JSON.stringify(state.userCache[uid], null, 2));
+
+    loadUserListToSidebar(handleRoomSelect);
+
+    changeNameModal.classList.add('hidden');
+    changeNameModal.classList.remove('flex');
+});
+
