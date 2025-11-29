@@ -1,13 +1,15 @@
 // chat.js
-import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, doc, updateDoc, increment } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, doc, updateDoc, increment, deleteDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { db } from "./config.js";
 import { state } from "./store.js";
-import { formatTime, formatDateLabel, escapeHTML, scrollToBottom } from "./utils.js";
+import { formatTime, formatDateLabel, escapeHTML, linkify, scrollToBottom } from "./utils.js";
 
 // DOM要素
 const msgContainer = document.getElementById('messages-container');
 const msgInput = document.getElementById('message-input');
 const sendBtn = document.getElementById('send-btn');
+
+// スレッド用エレメント
 const threadSidebar = document.getElementById('thread-sidebar');
 const closeThreadBtn = document.getElementById('close-thread-btn');
 const threadParentMsgEl = document.getElementById('thread-parent-msg');
@@ -26,8 +28,7 @@ export function initChat() {
 }
 
 function setupChatEvents() {
-    // メイン送信
-    sendBtn.addEventListener('click', sendMessage);
+    sendBtn.addEventListener('click', () => sendMessage());
     msgInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -37,11 +38,9 @@ function setupChatEvents() {
     msgInput.addEventListener('input', function() {
         this.style.height = 'auto';
         this.style.height = (this.scrollHeight) + 'px';
-        sendBtn.disabled = this.value.trim() === '';
-        sendBtn.classList.toggle('opacity-50', this.value.trim() === '');
+        toggleSendBtn();
     });
 
-    // スレッド送信
     threadSendBtn.addEventListener('click', sendThreadMessage);
     threadInput.addEventListener('keydown', (e) => {
         if(e.key === 'Enter' && !e.shiftKey) {
@@ -53,10 +52,22 @@ function setupChatEvents() {
     closeThreadBtn.addEventListener('click', closeThread);
 }
 
+function toggleSendBtn() {
+    const text = msgInput.value.trim();
+    sendBtn.disabled = text === '';
+    if(text === '') {
+        sendBtn.classList.add('opacity-50');
+    } else {
+        sendBtn.classList.remove('opacity-50');
+    }
+}
+
 // メッセージ送信
 export async function sendMessage() {
     const text = msgInput.value.trim();
+    
     if (!text || !state.currentUser) return;
+    
     sendBtn.disabled = true;
 
     const isDm = state.currentRoomId.includes('_');
@@ -71,12 +82,41 @@ export async function sendMessage() {
             createdAt: serverTimestamp(),
             replyCount: 0 
         });
+        
         msgInput.value = '';
         msgInput.style.height = 'auto';
         msgInput.focus();
     } catch (error) {
         console.error("Error sending message: ", error);
+        alert("送信できませんでした。");
+    } finally {
         sendBtn.disabled = false;
+        toggleSendBtn();
+    }
+}
+
+// ★追加: メッセージ削除機能
+async function deleteMessage(messageId, isThread = false) {
+    if(!confirm("このメッセージを削除しますか？")) return;
+
+    const isDm = state.currentRoomId.includes('_');
+    let docPath = '';
+
+    if (isThread) {
+        // スレッドメッセージの削除
+        const basePath = isDm ? `dms/${state.currentRoomId}/messages` : `rooms/${state.currentRoomId}/messages`;
+        docPath = `${basePath}/${currentThreadParentId}/thread/${messageId}`;
+    } else {
+        // メインメッセージの削除
+        const basePath = isDm ? `dms/${state.currentRoomId}/messages` : `rooms/${state.currentRoomId}/messages`;
+        docPath = `${basePath}/${messageId}`;
+    }
+
+    try {
+        await deleteDoc(doc(db, docPath));
+    } catch (error) {
+        console.error("Delete failed:", error);
+        alert("削除できませんでした。");
     }
 }
 
@@ -85,7 +125,6 @@ export function loadMessages(roomId, roomName) {
     if (unsubscribeMsg) { unsubscribeMsg(); unsubscribeMsg = null; }
     msgContainer.innerHTML = '';
     
-    // 部屋変更時にスレッドは閉じる
     closeThread();
     
     const isDm = roomId.includes('_');
@@ -127,16 +166,33 @@ export function loadMessages(roomId, roomName) {
             const timeString = formatTime(data.createdAt);
             const msgRow = document.createElement('div');
 
+            let contentHtml = '';
+            if (data.text) {
+                contentHtml += `<div>${linkify(data.text).replace(/\n/g, '<br>')}</div>`;
+            }
+
+            // ★追加: 削除ボタンHTML（自分のみ表示）
+            const deleteBtnHtml = isMe ? `
+                <button class="delete-btn text-slate-300 hover:text-red-500 p-1 transition opacity-0 group-hover:opacity-100" title="削除">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                    </svg>
+                </button>
+            ` : '';
+
             if (isDm) {
                 // DM (LINE風)
-                msgRow.className = `flex w-full ${isMe ? 'justify-end' : 'justify-start'} ${isContinuous ? 'mt-1' : 'mt-4'} fade-in`;
+                msgRow.className = `flex w-full ${isMe ? 'justify-end' : 'justify-start'} ${isContinuous ? 'mt-1' : 'mt-4'} fade-in group`;
                 if (isMe) {
                     msgRow.innerHTML = `
-                        <div class="max-w-[75%] flex flex-col items-end">
-                            <div class="flex items-end gap-1">
-                                <span class="text-[10px] text-slate-400 mb-1">${timeString}</span>
-                                <div class="bg-blue-500 text-white px-4 py-2 rounded-2xl rounded-tr-sm text-sm leading-relaxed break-words shadow-sm">
-                                    ${escapeHTML(data.text).replace(/\n/g, '<br>')}
+                        <div class="max-w-[75%] flex items-end gap-2">
+                            ${deleteBtnHtml}
+                            <div class="flex flex-col items-end">
+                                <div class="flex items-end gap-1">
+                                    <span class="text-[10px] text-slate-400 mb-1">${timeString}</span>
+                                    <div class="bg-blue-500 text-white px-4 py-2 rounded-2xl rounded-tr-sm text-sm leading-relaxed break-words shadow-sm">
+                                        ${contentHtml}
+                                    </div>
                                 </div>
                             </div>
                         </div>`;
@@ -148,7 +204,7 @@ export function loadMessages(roomId, roomName) {
                                 ${!isContinuous ? `<div class="text-[10px] text-slate-500 ml-1 mb-1">${escapeHTML(data.displayName)}</div>` : ''}
                                 <div class="flex items-end gap-1">
                                     <div class="bg-white text-slate-800 border border-slate-200 px-4 py-2 rounded-2xl rounded-tl-sm text-sm leading-relaxed break-words shadow-sm">
-                                        ${escapeHTML(data.text).replace(/\n/g, '<br>')}
+                                        ${contentHtml}
                                     </div>
                                     <span class="text-[10px] text-slate-400 mb-1">${timeString}</span>
                                 </div>
@@ -169,6 +225,16 @@ export function loadMessages(roomId, roomName) {
                 
                 const openThreadAction = () => openThread(msgId, data, roomName);
 
+                // アクションボタン（返信＋削除）
+                const actionButtons = `
+                    <div class="opacity-0 group-hover:opacity-100 flex items-start pt-1 gap-1">
+                        <button class="text-slate-400 hover:text-blue-500 p-1 rounded hover:bg-slate-200 transition reply-btn" title="スレッドで返信">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" /></svg>
+                        </button>
+                        ${deleteBtnHtml}
+                    </div>
+                `;
+
                 if (!isContinuous) {
                     msgRow.innerHTML = `
                         <div class="shrink-0 pt-1">
@@ -179,26 +245,20 @@ export function loadMessages(roomId, roomName) {
                                 <span class="font-bold text-slate-700 text-sm cursor-pointer hover:underline">${escapeHTML(data.displayName)}</span>
                                 <span class="text-[10px] text-slate-400">${timeString}</span>
                             </div>
-                            <div class="text-slate-800 text-[15px] leading-relaxed break-words whitespace-pre-wrap mt-0.5">${escapeHTML(data.text)}</div>
+                            <div class="text-slate-800 text-[15px] leading-relaxed break-words whitespace-pre-wrap mt-0.5">${contentHtml}</div>
                             ${replyIndicator}
                         </div>
-                        <div class="opacity-0 group-hover:opacity-100 flex items-start pt-1">
-                            <button class="text-slate-400 hover:text-blue-500 p-1 rounded hover:bg-slate-200 transition reply-btn" title="スレッドで返信">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" /></svg>
-                            </button>
-                        </div>`;
+                        ${actionButtons}
+                    `;
                 } else {
                     msgRow.innerHTML = `
                         <div class="w-9 shrink-0 text-[10px] text-slate-300 text-right opacity-0 group-hover:opacity-100 select-none pt-1.5 pr-1">${timeString}</div>
                         <div class="flex-1 min-w-0">
-                            <div class="text-slate-800 text-[15px] leading-relaxed break-words whitespace-pre-wrap">${escapeHTML(data.text)}</div>
+                            <div class="text-slate-800 text-[15px] leading-relaxed break-words whitespace-pre-wrap">${contentHtml}</div>
                             ${replyIndicator}
                         </div>
-                        <div class="opacity-0 group-hover:opacity-100 flex items-start pt-0">
-                            <button class="text-slate-400 hover:text-blue-500 p-1 rounded hover:bg-slate-200 transition reply-btn" title="スレッドで返信">
-                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" /></svg>
-                            </button>
-                        </div>`;
+                        ${actionButtons}
+                    `;
                 }
 
                 const btn = msgRow.querySelector('.reply-btn');
@@ -206,6 +266,10 @@ export function loadMessages(roomId, roomName) {
                 const link = msgRow.querySelector('.thread-link');
                 if(link) link.onclick = openThreadAction;
             }
+
+            // 削除ボタンイベント
+            const delBtn = msgRow.querySelector('.delete-btn');
+            if(delBtn) delBtn.onclick = () => deleteMessage(msgId, false);
 
             msgContainer.appendChild(msgRow);
             lastUid = data.uid;
@@ -221,6 +285,11 @@ function openThread(messageId, parentData, roomName) {
     threadSidebar.classList.add('translate-x-0');
     threadRoomNameEl.textContent = roomName;
 
+    let contentHtml = '';
+    if (parentData.text) {
+        contentHtml += `<div>${linkify(parentData.text)}</div>`;
+    }
+
     threadParentMsgEl.innerHTML = `
         <div class="flex gap-3">
             <img src="${parentData.photoURL}" class="w-8 h-8 rounded-md bg-slate-200 object-cover mt-1">
@@ -229,7 +298,7 @@ function openThread(messageId, parentData, roomName) {
                     <span class="font-bold text-slate-700 text-sm">${escapeHTML(parentData.displayName)}</span>
                     <span class="text-[10px] text-slate-400">${formatTime(parentData.createdAt)}</span>
                 </div>
-                <div class="text-slate-800 text-sm mt-1">${escapeHTML(parentData.text)}</div>
+                <div class="text-slate-800 text-sm mt-1">${contentHtml}</div>
             </div>
         </div>
     `;
@@ -261,18 +330,35 @@ function loadThreadMessages(parentId) {
         }
         snapshot.forEach(docSnap => {
             const data = docSnap.data();
+            const msgId = docSnap.id;
+            const isMe = data.uid === state.currentUser.uid;
+
+            // ★追加: スレッド内の削除ボタン
+            const deleteBtnHtml = isMe ? `
+                <button class="delete-btn text-slate-300 hover:text-red-500 p-1 ml-auto opacity-0 group-hover:opacity-100 transition" title="削除">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-3 h-3">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                    </svg>
+                </button>
+            ` : '';
+
             const div = document.createElement('div');
-            div.className = "flex gap-2 mb-3";
+            div.className = "flex gap-2 mb-3 group";
             div.innerHTML = `
                 <img src="${data.photoURL}" class="w-7 h-7 rounded-md bg-slate-200 object-cover mt-1">
                 <div class="flex-1 min-w-0">
                     <div class="flex items-baseline gap-2">
                         <span class="font-bold text-slate-700 text-xs">${escapeHTML(data.displayName)}</span>
                         <span class="text-[10px] text-slate-400">${formatTime(data.createdAt)}</span>
+                        ${deleteBtnHtml}
                     </div>
-                    <div class="text-slate-800 text-sm mt-0.5 break-words whitespace-pre-wrap">${escapeHTML(data.text)}</div>
+                    <div class="text-slate-800 text-sm mt-0.5 break-words whitespace-pre-wrap">${linkify(data.text)}</div>
                 </div>
             `;
+            
+            const delBtn = div.querySelector('.delete-btn');
+            if(delBtn) delBtn.onclick = () => deleteMessage(msgId, true);
+
             threadMsgContainer.appendChild(div);
         });
         scrollToBottom(threadMsgContainer);
