@@ -97,11 +97,15 @@ export function loadUserListToSidebar(onRoomSelect) {
         resetUserCache();
         dmListEl.innerHTML = '';
 
+        console.log("🟡 [sidebar.js] Firestore users snapshot start");
+
         snapshot.forEach(docSnap => {
             const user = docSnap.data();
+
+            console.log("🟡 [sidebar.js] Firestore user =", docSnap.id, user);
             updateUserCache(docSnap.id, user);
 
-            if (user.uid === state.currentUser.uid) return;
+            // if (user.uid === state.currentUser.uid) return;
 
             const uids = [state.currentUser.uid, user.uid].sort();
             const dmId = `${uids[0]}_${uids[1]}`;
@@ -112,13 +116,17 @@ export function loadUserListToSidebar(onRoomSelect) {
 
             const isActive = dmId === state.currentRoomId;
             btn.className = getButtonClass(isActive);
-            
+
+            const displayNameForList =
+                user.displayNameAlias || user.displayName || '(no name)';
+
             btn.innerHTML = `
                 <img src="${user.photoURL}" class="w-5 h-5 rounded-full bg-slate-500 opacity-80 object-cover">
-                <span class="truncate">${escapeHTML(user.displayName)}</span>
+                <span class="truncate">${escapeHTML(displayNameForList)}</span>
             `;
             
-            btn.onclick = () => onRoomSelect(dmId, user.displayName);
+            btn.onclick = () => onRoomSelect(dmId, displayNameForList);
+
             dmListEl.appendChild(btn);
         });
         
