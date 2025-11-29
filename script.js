@@ -1,5 +1,4 @@
 // script.js
-// Firebase SDK imports
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } 
     from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
@@ -18,8 +17,15 @@ const firebaseConfig = {
   appId: "1:25562541212:web:c2c7dcc68e0a672e7f9159"
 };
 
+// ★ルーム設定
+const AVAILABLE_ROOMS = [
+    { id: 'general', name: '雑談広場' },
+    { id: 'random', name: 'ランダム' },
+    { id: 'dev', name: '開発部' }
+];
+
 // ==========================================
-//  初期化とロジック
+//  初期化
 // ==========================================
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -28,7 +34,7 @@ const provider = new GoogleAuthProvider();
 
 // DOM Elements
 const loginScreen = document.getElementById('login-screen');
-const chatScreen = document.getElementById('chat-screen');
+const chatScreen = document.getElementById('chat-screen'); // このIDは親コンテナではなくチャット部分を指すようになりましたが、表示制御はCSSクラスで行っています
 const loginBtn = document.getElementById('login-btn');
 const logoutBtn = document.getElementById('logout-btn');
 const sendBtn = document.getElementById('send-btn');
@@ -39,9 +45,21 @@ const usersModal = document.getElementById('users-modal');
 const closeUsersBtn = document.getElementById('close-users-btn');
 const usersList = document.getElementById('users-list');
 
+// Sidebar Elements
+const menuBtn = document.getElementById('menu-btn');
+const sidebar = document.getElementById('sidebar');
+const closeSidebarBtn = document.getElementById('close-sidebar-btn');
+const sidebarOverlay = document.getElementById('sidebar-overlay');
+const roomListEl = document.getElementById('room-list');
+const currentRoomNameEl = document.getElementById('current-room-name');
+
 let currentUser = null;
+let currentRoomId = 'general'; // 初期ルーム
 let unsubscribeMsg = null;
 let unsubscribeUsers = null;
+
+// --- 初期化処理 ---
+renderRoomList();
 
 // --- ログイン処理 ---
 loginBtn.addEventListener('click', async () => {
@@ -62,6 +80,7 @@ onAuthStateChanged(auth, async (user) => {
     if (user) {
         currentUser = user;
 
+        // ユーザー情報保存
         try {
             await setDoc(doc(db, "users", user.uid), {
                 uid: user.uid,
@@ -76,25 +95,66 @@ onAuthStateChanged(auth, async (user) => {
         loginScreen.style.opacity = '0';
         setTimeout(() => {
             loginScreen.style.display = 'none';
-            chatScreen.style.display = 'flex';
-            setTimeout(() => chatScreen.style.opacity = '1', 50);
         }, 500);
         
-        loadMessages();
+        loadMessages(currentRoomId);
     } else {
         currentUser = null;
-        chatScreen.style.opacity = '0';
-        setTimeout(() => {
-            chatScreen.style.display = 'none';
-            loginScreen.style.display = 'flex';
-            setTimeout(() => loginScreen.style.opacity = '1', 50);
-        }, 500);
+        loginScreen.style.display = 'flex';
+        setTimeout(() => loginScreen.style.opacity = '1', 50);
 
         if (unsubscribeMsg) unsubscribeMsg();
         if (unsubscribeUsers) unsubscribeUsers();
         msgContainer.innerHTML = '';
     }
 });
+
+// --- サイドバー(ルーム一覧)制御 ---
+function renderRoomList() {
+    roomListEl.innerHTML = '';
+    AVAILABLE_ROOMS.forEach(room => {
+        const btn = document.createElement('button');
+        const isActive = room.id === currentRoomId;
+        
+        btn.className = `w-full text-left px-3 py-2 rounded-lg mb-1 flex items-center gap-2 transition ${
+            isActive ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-700 hover:text-slate-200'
+        }`;
+        btn.innerHTML = `<span class="opacity-60">#</span> ${room.name}`;
+        
+        btn.onclick = () => switchRoom(room);
+        roomListEl.appendChild(btn);
+    });
+}
+
+function switchRoom(room) {
+    if (currentRoomId === room.id) return;
+    
+    currentRoomId = room.id;
+    currentRoomNameEl.textContent = `# ${room.name}`; // ヘッダー更新
+    renderRoomList(); // ハイライト更新
+    
+    // モバイルならサイドバーを閉じる
+    closeSidebar();
+    
+    loadMessages(room.id);
+}
+
+// モバイル用メニュー開閉
+menuBtn.addEventListener('click', () => {
+    sidebar.classList.remove('sidebar-closed');
+    sidebar.classList.add('sidebar-open');
+    sidebarOverlay.classList.remove('hidden');
+});
+
+function closeSidebar() {
+    sidebar.classList.remove('sidebar-open');
+    sidebar.classList.add('sidebar-closed');
+    sidebarOverlay.classList.add('hidden');
+}
+
+closeSidebarBtn.addEventListener('click', closeSidebar);
+sidebarOverlay.addEventListener('click', closeSidebar);
+
 
 // --- メッセージ送信 ---
 sendBtn.addEventListener('click', sendMessage);
@@ -126,7 +186,8 @@ async function sendMessage() {
     sendBtn.disabled = true;
     
     try {
-        await addDoc(collection(db, "messages"), {
+        // ★変更: roomsコレクションの下に保存
+        await addDoc(collection(db, "rooms", currentRoomId, "messages"), {
             text: text,
             uid: currentUser.uid,
             displayName: currentUser.displayName,
@@ -143,36 +204,43 @@ async function sendMessage() {
     }
 }
 
-// --- 時刻フォーマット ---
+// --- フォーマット関数 ---
 function formatTime(timestamp) {
     if (!timestamp) return '';
     const date = timestamp.toDate ? timestamp.toDate() : new Date();
     return date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
 }
 
-// --- ★追加: 日付フォーマット（区切り線用） ---
 function formatDateLabel(timestamp) {
     if (!timestamp) return '';
     const date = timestamp.toDate ? timestamp.toDate() : new Date();
-    // 例: 2023年11月29日
     return date.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' });
 }
 
-// --- メッセージ読み込みと表示 ---
-function loadMessages() {
-    const q = query(collection(db, "messages"), orderBy("createdAt", "asc"));
+// --- メッセージ読み込み ---
+function loadMessages(roomId) {
+    // 既存のリスナーがあれば解除
+    if (unsubscribeMsg) {
+        unsubscribeMsg();
+        unsubscribeMsg = null;
+    }
+
+    msgContainer.innerHTML = ''; // 画面クリア
+
+    // ★変更: ルームごとのパスを指定
+    const q = query(collection(db, "rooms", roomId, "messages"), orderBy("createdAt", "asc"));
     
     unsubscribeMsg = onSnapshot(q, (snapshot) => {
-        msgContainer.innerHTML = '';
+        msgContainer.innerHTML = ''; // 再描画（差分更新ではない簡易実装）
         
         let lastUid = null;
-        let lastDateString = null; // ★追加: 前回の日付文字列を保持
+        let lastDateString = null;
 
         snapshot.forEach((doc) => {
             const data = doc.data();
-            const currentDateString = formatDateLabel(data.createdAt); // このメッセージの日付
+            const currentDateString = formatDateLabel(data.createdAt);
             
-            // ★追加: 日付が変わったら区切り線を表示
+            // 日付区切り線
             if (currentDateString !== lastDateString) {
                 const dateDivider = document.createElement('div');
                 dateDivider.className = "flex justify-center my-6 fade-in";
@@ -182,12 +250,10 @@ function loadMessages() {
                     </span>
                 `;
                 msgContainer.appendChild(dateDivider);
-                
-                lastDateString = currentDateString; // 日付を更新
-                lastUid = null; // 日付が変わったら連続投稿扱いしない（アイコンを出すため）
+                lastDateString = currentDateString;
+                lastUid = null;
             }
 
-            // --- ここから通常のメッセージ表示 ---
             const isMyMessage = data.uid === currentUser.uid;
             const isContinuous = data.uid === lastUid;
             const timeString = formatTime(data.createdAt);
@@ -196,7 +262,6 @@ function loadMessages() {
             msgRow.className = `flex w-full ${isMyMessage ? 'justify-end' : 'justify-start'} ${isContinuous ? 'mt-1' : 'mt-4'} fade-in`;
 
             if (isMyMessage) {
-                // 自分
                 msgRow.innerHTML = `
                     <div class="max-w-[75%]">
                         <div class="bg-blue-600 text-white px-4 py-2 rounded-2xl rounded-tr-sm shadow-sm text-sm leading-relaxed break-words">
@@ -208,7 +273,6 @@ function loadMessages() {
                     </div>
                 `;
             } else {
-                // 相手
                 msgRow.innerHTML = `
                     <div class="flex items-end gap-2 max-w-[85%]">
                         ${!isContinuous ? `<img src="${data.photoURL}" class="w-8 h-8 rounded-full shadow-sm mb-6 bg-slate-200 object-cover">` : '<div class="w-8"></div>'}
