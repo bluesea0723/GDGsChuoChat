@@ -1,9 +1,10 @@
 // main.js
 import { signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { doc, setDoc, serverTimestamp, collection, getDoc, setDoc as setDocFs } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { doc, setDoc, serverTimestamp, setDoc as setDocFs } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { auth, db, provider } from "./config.js";
 import { state, setCurrentUser, setCurrentRoomId } from "./store.js";
-import { initSidebar, loadUserListToSidebar, renderChannelList, cleanupSidebar, closeSidebar } from "./sidebar.js";
+// ★変更: updateSidebarHighlights をインポートに追加
+import { initSidebar, loadUserListToSidebar, updateSidebarHighlights, cleanupSidebar, closeSidebar } from "./sidebar.js";
 import { initChat, loadMessages, cleanupChat, closeThread } from "./chat.js";
 import { escapeHTML } from "./utils.js";
 
@@ -19,7 +20,7 @@ const currentRoomNameEl = document.getElementById('current-room-name');
 const msgContainer = document.getElementById('messages-container');
 
 // 初期化
-initSidebar(handleRoomSelect); // サイドバーに「部屋が選ばれたら何をするか」を渡す
+initSidebar(handleRoomSelect);
 initChat();
 
 // --- 認証ロジック ---
@@ -39,7 +40,6 @@ onAuthStateChanged(auth, async (user) => {
     if (user) {
         setCurrentUser(user);
         
-        // ユーザー情報保存
         try {
             await setDoc(doc(db, "users", user.uid), {
                 uid: user.uid,
@@ -52,14 +52,9 @@ onAuthStateChanged(auth, async (user) => {
         loginScreen.style.opacity = '0';
         setTimeout(() => loginScreen.style.display = 'none', 500);
         
-        // データ読み込み開始
         loadUserListToSidebar(handleRoomSelect);
-        handleRoomSelect('general', 'General'); // 初期表示
+        handleRoomSelect('general', 'General');
         
-        // モーダルのユーザーリスト用イベント（サイドバーとは別だが、ロジックは似ているので簡易実装）
-        // ※実際にはsidebar.jsのロジックを再利用するか、storeのcacheを使うと良い
-        renderUserListModal(); 
-
     } else {
         setCurrentUser(null);
         loginScreen.style.display = 'flex';
@@ -75,7 +70,11 @@ onAuthStateChanged(auth, async (user) => {
 
 // --- 部屋切り替えロジック ---
 function handleRoomSelect(roomId, roomName) {
-    if (state.currentRoomId === roomId && msgContainer.hasChildNodes()) return; // 同じ部屋ならリロードしない
+    if (state.currentRoomId === roomId && msgContainer.hasChildNodes()) {
+        // 同じ部屋ならハイライト更新とサイドバー閉じる処理だけして終了
+        updateSidebarHighlights();
+        return; 
+    }
     
     setCurrentRoomId(roomId);
     
@@ -85,10 +84,9 @@ function handleRoomSelect(roomId, roomName) {
         ? `<span class="text-slate-400 text-sm font-normal mr-1">DM:</span> ${escapeHTML(roomName)}`
         : `<span class="text-slate-400">#</span> ${roomName}`;
 
-    // サイドバーの表示更新（ハイライトなど）
-    renderChannelList(handleRoomSelect); // 再描画でハイライト適用
+    // ★変更: ハイライト更新関数を呼び出し（再描画ではなくクラス付け替え）
+    updateSidebarHighlights();
     
-    // チャット読み込み
     loadMessages(roomId, roomName);
 }
 
@@ -101,9 +99,6 @@ usersBtn.addEventListener('click', () => {
 
 function renderUserListModal() {
     usersList.innerHTML = '';
-    // store.jsのuserCacheを使ってもいいが、ここではシンプルに再取得せずcacheがある前提で動くか、
-    // sidebar.jsからimportしたデータを使うのが綺麗。
-    // 今回は簡易的にstore.state.userCacheを使います。
     
     Object.values(state.userCache).forEach(user => {
         const isMe = user.uid === state.currentUser?.uid;
@@ -121,10 +116,8 @@ function renderUserListModal() {
         `;
         if(!isMe) {
             div.onclick = () => {
-                // DM開始処理
                 const uids = [state.currentUser.uid, user.uid].sort();
                 const dmId = `${uids[0]}_${uids[1]}`;
-                // DM作成 (Sidebarのロジックと同じだが、importが循環するのでここで作成)
                 setDocFs(doc(db, "dms", dmId), { participants: uids, updatedAt: serverTimestamp() }, { merge: true })
                     .then(() => {
                         usersModal.classList.add('hidden');

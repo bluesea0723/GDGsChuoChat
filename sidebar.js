@@ -1,5 +1,5 @@
 // sidebar.js
-import { collection, query, orderBy, onSnapshot, where } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { collection, query, orderBy, onSnapshot } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { db, AVAILABLE_CHANNELS } from "./config.js";
 import { state, updateUserCache, resetUserCache } from "./store.js";
 import { escapeHTML } from "./utils.js";
@@ -16,17 +16,12 @@ let unsubscribeUsers = null;
 
 // サイドバー初期化
 export function initSidebar(onRoomSelect) {
-    setupSidebarEvents();
     renderChannelList(onRoomSelect);
     
     // モバイル用メニュー開閉イベント
-    menuBtn.addEventListener('click', openSidebar);
-    closeSidebarBtn.addEventListener('click', closeSidebar);
-    sidebarOverlay.addEventListener('click', closeSidebar);
-}
-
-function setupSidebarEvents() {
-    // 必要に応じて追加
+    if(menuBtn) menuBtn.addEventListener('click', openSidebar);
+    if(closeSidebarBtn) closeSidebarBtn.addEventListener('click', closeSidebar);
+    if(sidebarOverlay) sidebarOverlay.addEventListener('click', closeSidebar);
 }
 
 // チャンネル一覧描画
@@ -34,15 +29,17 @@ export function renderChannelList(onRoomSelect) {
     roomListEl.innerHTML = '';
     AVAILABLE_CHANNELS.forEach(room => {
         const btn = document.createElement('button');
+        // ★追加: IDをデータ属性として埋め込む（後でハイライト判定に使う）
+        btn.dataset.roomId = room.id;
+        
+        // 初期表示時の判定
         const isActive = room.id === state.currentRoomId;
-        btn.className = `w-full text-left px-3 py-2 rounded-md mb-1 flex items-center gap-2 transition text-sm ${
-            isActive ? 'bg-slate-700 text-white font-bold' : 'text-slate-400 hover:bg-slate-700/50 hover:text-slate-200'
-        }`;
+        btn.className = getButtonClass(isActive);
+        
         btn.innerHTML = `<span class="opacity-50 text-lg leading-none">#</span><span>${room.name}</span>`;
         
         btn.onclick = () => {
             onRoomSelect(room.id, room.name);
-            updateHighlights();
         };
         roomListEl.appendChild(btn);
     });
@@ -68,11 +65,12 @@ export function loadUserListToSidebar(onRoomSelect) {
             const dmId = `${uids[0]}_${uids[1]}`;
 
             const btn = document.createElement('button');
-            btn.dataset.roomId = dmId; // ハイライト用
+            // ★追加: IDをデータ属性として埋め込む
+            btn.dataset.roomId = dmId;
+
+            // 初期表示時の判定
             const isActive = dmId === state.currentRoomId;
-            btn.className = `w-full text-left px-3 py-2 rounded-md mb-1 flex items-center gap-2 transition text-sm ${
-                isActive ? 'bg-slate-700 text-white font-bold' : 'text-slate-400 hover:bg-slate-700/50 hover:text-slate-200'
-            }`;
+            btn.className = getButtonClass(isActive);
             
             btn.innerHTML = `
                 <img src="${user.photoURL}" class="w-5 h-5 rounded-full bg-slate-500 opacity-80 object-cover">
@@ -81,28 +79,35 @@ export function loadUserListToSidebar(onRoomSelect) {
             
             btn.onclick = () => {
                 onRoomSelect(dmId, user.displayName);
-                updateHighlights();
             };
             dmListEl.appendChild(btn);
         });
     });
 }
 
-// 選択状態（ハイライト）の更新
-export function updateHighlights() {
-    renderChannelList((id, name) => { /* 再描画時のコールバックは既に登録済みなので空でOKだが再帰に注意 */ }); 
-    // ※renderChannelListを呼ぶと全再描画になるため、ここでは簡易的にクラスを付け替えるのが効率的ですが
-    //  コードを単純にするため再描画アプローチをとっています。
-    //  ただしrenderChannelListの引数が必要になるため、今回は簡易実装として
-    //  「DOMのクラスを直接書き換える」方式を推奨します。
-    
-    // チャンネルリストのハイライト更新
+// ★追加: ハイライトを一括更新する関数
+export function updateSidebarHighlights() {
+    // チャンネルリストの更新
     Array.from(roomListEl.children).forEach(btn => {
-        // ボタンのHTMLテキストから判定するのは不安定なので、本当はIDを持たせた方が良い
-        // 今回は再描画で対応します（main.jsから制御）
+        const isActive = btn.dataset.roomId === state.currentRoomId;
+        btn.className = getButtonClass(isActive);
+    });
+
+    // DMリストの更新
+    Array.from(dmListEl.children).forEach(btn => {
+        const isActive = btn.dataset.roomId === state.currentRoomId;
+        btn.className = getButtonClass(isActive);
     });
     
+    // 部屋が変わったらサイドバーを閉じる（モバイル用）
     closeSidebar();
+}
+
+// スタイル定義を一箇所にまとめる
+function getButtonClass(isActive) {
+    return `w-full text-left px-3 py-2 rounded-md mb-1 flex items-center gap-2 transition text-sm ${
+        isActive ? 'bg-slate-700 text-white font-bold' : 'text-slate-400 hover:bg-slate-700/50 hover:text-slate-200'
+    }`;
 }
 
 export function closeSidebar() {
