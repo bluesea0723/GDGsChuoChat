@@ -16,6 +16,15 @@ export function escapeHTML(str) {
     return str.replace(/[&<>'"]/g, tag => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'}[tag]));
 }
 
+// ★これが必要です！ URLをリンク化する関数
+export function linkify(text) {
+    const escapedText = escapeHTML(text);
+    const urlRegex = /(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig;
+    return escapedText.replace(urlRegex, (url) => {
+        return `<a href="${url}" target="_blank" class="text-blue-500 hover:underline break-all">${url}</a>`;
+    });
+}
+
 // チャット最下部へスクロール
 export function scrollToBottom(element) {
     if(element) element.scrollTop = element.scrollHeight;
