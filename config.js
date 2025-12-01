@@ -27,5 +27,6 @@ export const AVAILABLE_CHANNELS = [
     { id: 'general', name: 'General' },
     { id: 'tech', name: 'Tech' },
     { id: 'event', name: 'Event' },
-    { id: 'marketing', name: 'Marketing' }
+    { id: 'marketing', name: 'Marketing' },
+    { id: 'sns-dev', name: 'SNS開発' }
 ];
